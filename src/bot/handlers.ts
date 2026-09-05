@@ -4,7 +4,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { INFLASI_REDIRECT_CARD } from '../data/csvLoader.js';
 import { processUserMessage } from '../nlp/matcher.js';
-import { isChatSuspended, resumeBot } from './whatsapp.js';
+import { isChatSuspended, resumeBot, botProcessStartTime } from './whatsapp.js';
+import { ticketService } from '../services/ticketService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -46,7 +47,26 @@ export async function handleIncomingMessages(sock: WASocket, messages: any[]) {
       continue;
     }
 
-    // 3. DETEKSI PENGUJIAN SENDIRI (Self-Chat / Message Yourself)
+    // 3. FILTER ANTI-SPAM PESAN KADALUWARSA / SAAT BOT MATI (OFFLINE BACKLOG)
+    // Mencegah bot membalas pesan lama yang menumpuk saat komputer/bot dimatikan.
+    const rawTimestamp = msg.messageTimestamp;
+    const msgTimestamp = typeof rawTimestamp === 'number'
+      ? rawTimestamp
+      : (typeof rawTimestamp === 'object' && rawTimestamp?.low ? rawTimestamp.low : Number(rawTimestamp) || 0);
+
+    const nowSec = Math.floor(Date.now() / 1000);
+    const maxAgeSec = parseInt(process.env.MAX_MESSAGE_AGE_SECONDS || '120', 10);
+    const ageInSeconds = nowSec - msgTimestamp;
+
+    // Jika pesan dikirim sebelum bot menyala ATAU usianya melebihi toleransi maxAgeSec:
+    if (msgTimestamp > 0 && maxAgeSec > 0 && (msgTimestamp < (botProcessStartTime - 10) || ageInSeconds > maxAgeSec)) {
+      const senderPhone = (jid || '').split(':')[0].split('@')[0];
+      const sentTimeStr = new Date(msgTimestamp * 1000).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' });
+      console.log(`[ABAIKAN PESAN LAMA] Dari: ${senderPhone} | Terkirim: ${sentTimeStr} (${ageInSeconds} detik lalu). Dilewati karena masuk saat bot offline/mati.`);
+      continue;
+    }
+
+    // 4. DETEKSI PENGUJIAN SENDIRI (Self-Chat / Message Yourself)
     const remoteNumber = jid.split(':')[0].split('@')[0];
     const isSelfChat = !!(
       (myNumber && remoteNumber === myNumber) ||
@@ -123,23 +143,73 @@ export async function handleIncomingMessages(sock: WASocket, messages: any[]) {
 
     const sendOpts = isSelfChat ? {} : { quoted: msg };
 
-    // 0. CEK STATUS SUSPEND (MODE CHAT DENGAN ADMIN / PELAYANAN)
-    const isSuspended = isChatSuspended(remoteNumber);
+    // ============================================================
+    // 0. INTEGRASI CUSTOMER SERVICE & TICKETING MANAGEMENT
+    // ============================================================
+    const activeTicket = await ticketService.getActiveTicketByPhone(remoteNumber);
 
-    // Jika sedang di-suspend dan pengguna/admin ingin mengaktifkan kembali bot:
-    const RESUME_TRIGGERS = ['#resume', '#bot', '/resume', '/bot', 'aktifkan bot', 'kembali ke bot', 'resume bot'];
-    if (isSuspended && RESUME_TRIGGERS.includes(cleanMsg)) {
-      resumeBot(remoteNumber);
-      await safeSendMessage(jid, {
-        text: '🤖 *SAPA Bot Diaktifkan Kembali*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nLayanan asisten otomatis telah aktif kembali. Silakan ketik *menu* atau ajukan pertanyaan Anda seputar data statistik BPS Kab. Bangka.'
-      }, sendOpts);
-      console.log(`[BOT RESUMED] -> Sesi chat untuk ${remoteNumber} kembali aktif.`);
+    // KASUS A: Pengguna sedang berada dalam tiket aktif (mode HUMAN)
+    if (activeTicket && activeTicket.mode === 'HUMAN') {
+      // 1. Cek apakah user ingin menutup percakapan (User-initiated Close)
+      const USER_CLOSE_TRIGGERS = [
+        '#selesai', '#tutup', '/selesai', '/close', 'akhiri percakapan', 
+        'akhiri chat', 'selesai chat', 'tutup tiket', '🔴 akhiri percakapan',
+        'selesai', 'keluar cs'
+      ];
+      if (USER_CLOSE_TRIGGERS.some(t => cleanMsg === t || (cleanMsg.length <= 25 && cleanMsg.includes(t)))) {
+        await ticketService.closeTicket(
+          activeTicket.id, 
+          'USER', 
+          activeTicket.user_id, 
+          'Diakhiri oleh pengguna melalui WhatsApp'
+        );
+        await safeSendMessage(jid, {
+          text: `🔒 *Percakapan Customer Service Diakhiri*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nSesi percakapan Anda untuk Tiket *#${activeTicket.ticket_number}* telah ditutup.\n\nTerima kasih telah menghubungi Layanan BPS Kab. Bangka. Asisten bot otomatis kini telah aktif kembali.\n\nSilakan ketik *menu* untuk melihat informasi data statistik resmi.`
+        }, sendOpts);
+        console.log(`[CS TICKET CLOSED BY USER] Tiket #${activeTicket.ticket_number} ditutup oleh ${remoteNumber}.`);
+        continue;
+      }
+
+      // 2. Simpan pesan pengguna ke tiket CS
+      await ticketService.addMessage(
+        activeTicket.id,
+        'USER',
+        activeTicket.user_id,
+        text,
+        isImage ? 'IMAGE' : 'TEXT',
+        msg.key?.id,
+        imageBase64 ? { hasImage: true } : undefined
+      );
+
+      console.log(`[CS INBOX] Pesan dari ${remoteNumber} diteruskan ke tiket #${activeTicket.ticket_number} (Status: ${activeTicket.status}). Bot tidak membalas.`);
       continue;
     }
 
-    // Jika chat dalam status SUSPEND, jangan balas otomatis agar admin leluasa berinteraksi
-    if (isSuspended) {
-      console.log(`[MODE ADMIN/PELAYANAN - BOT SUSPENDED] -> Tidak membalas otomatis untuk ${remoteNumber} (Chat ditangani admin).`);
+    // KASUS B: Pengguna meminta bantuan Customer Service / Hubungi Admin
+    const CS_REQUEST_TRIGGERS = [
+      'hubungi admin', 'hubungi cs', 'customer service', 'bantuan cs', 
+      'admin cs', 'petugas pst', 'hubungi petugas', 'bicara dengan admin', 
+      'chat admin', 'operator', 'cs', '#cs', '/cs', '🔴 hubungi admin',
+      'mau bicara dengan orang', 'bantuan manusia'
+    ];
+    if (CS_REQUEST_TRIGGERS.some(t => cleanMsg === t || (cleanMsg.length <= 20 && cleanMsg.includes(t)))) {
+      const { ticket, isNew } = await ticketService.createTicket(
+        remoteNumber, 
+        (msg as any).pushName || undefined, 
+        text, 
+        msg.key?.id
+      );
+
+      if (isNew) {
+        await safeSendMessage(jid, {
+          text: `🎫 *Tiket Bantuan Customer Service Dibuat*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nNomor Tiket: *#${ticket.ticket_number}*\nStatus: *Menunggu Petugas (WAITING)*\n\nPermintaan Anda telah kami terima. Petugas Customer Service BPS Kab. Bangka akan segera bergabung dalam obrolan ini.\n\n_Ketik #selesai kapan saja jika Anda ingin membatalkan dan kembali ke asisten bot otomatis._`
+        }, sendOpts);
+        console.log(`[CS TICKET CREATED] Tiket #${ticket.ticket_number} dibuat untuk ${remoteNumber}.`);
+      } else {
+        await safeSendMessage(jid, {
+          text: `ℹ️ *Tiket Customer Service Sedang Berjalan*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nAnda telah memiliki tiket aktif *#${ticket.ticket_number}* dengan status *${ticket.status}*.\n\nSilakan sampaikan pertanyaan atau kendala Anda di sini, petugas kami akan segera membalasnya.\n\n_Ketik #selesai untuk mengakhiri sesi CS._`
+        }, sendOpts);
+      }
       continue;
     }
 

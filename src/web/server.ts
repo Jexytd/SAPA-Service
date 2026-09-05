@@ -29,6 +29,7 @@ import {
   Category,
   User
 } from '../data/dbStore.js';
+import { createTicketRouter } from '../routes/ticketRoutes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -81,6 +82,9 @@ export function createWebServer(): express.Express {
     }
     next();
   });
+
+  // Mount Customer Service & Ticketing API router
+  app.use('/api', createTicketRouter());
 
   // Helper generator ID
   const uid = () => Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
@@ -1320,7 +1324,12 @@ export function createWebServer(): express.Express {
         faqs: '/api/faqs',
         reviews: '/api/reviews',
         users: '/api/users',
-        auditLogs: '/api/audit-logs'
+        auditLogs: '/api/audit-logs',
+        tickets: '/api/tickets',
+        csEvents: '/api/cs/events',
+        csAdmins: '/api/cs/admins',
+        csSettings: '/api/cs/settings',
+        wsEndpoint: '/ws/cs'
       }
     });
   });

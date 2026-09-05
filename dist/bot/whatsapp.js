@@ -10,6 +10,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const AUTH_DIR = path.resolve(__dirname, '../../auth_info');
 const QR_LIFETIME_MS = 5 * 60 * 1000; // 5 menit auto-reset QR Code
+// Catat waktu proses bot mulai menyala (Unix timestamp detik)
+export const botProcessStartTime = Math.floor(Date.now() / 1000);
 let reconnectTimeout = null;
 let qrRefreshTimeout = null;
 let currentSocket = null;
@@ -404,7 +406,11 @@ export async function startWhatsAppBot() {
         }
     });
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        // Filter hanya pesan pribadi (abaikan grup @g.us, status/broadcast @broadcast, dan channel @newsletter)
+        // 1. Abaikan sinkronisasi riwayat obrolan lama WhatsApp (hanya terima 'notify' untuk pesan real-time baru)
+        if (type !== 'notify') {
+            return;
+        }
+        // 2. Filter hanya pesan pribadi (abaikan grup @g.us, status/broadcast @broadcast, dan channel @newsletter)
         const privateMessages = messages.filter(msg => {
             const jid = msg.key?.remoteJid;
             if (!jid)

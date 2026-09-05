@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { processUserMessage } from '../nlp/matcher.js';
 import { getBotStatus, resetWhatsAppAuth, requestPairing, suspendBot, resumeBot, getSuspendedSessions, isChatSuspended, refreshQRCode } from '../bot/whatsapp.js';
 import { loadBackendStore, saveBackendStore, getFAQDataFromStore, syncDataToFAQ, syncAllPublishedToFAQ, DataStatus, AuditAction } from '../data/dbStore.js';
+import { createTicketRouter } from '../routes/ticketRoutes.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 export function createWebServer() {
@@ -54,6 +55,8 @@ export function createWebServer() {
         }
         next();
     });
+    // Mount Customer Service & Ticketing API router
+    app.use('/api', createTicketRouter());
     // Helper generator ID
     const uid = () => Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
     // Middleware pengaman API key untuk endpoint sensitif (opsional jika API_KEY diatur di .env)
@@ -1166,7 +1169,12 @@ export function createWebServer() {
                 faqs: '/api/faqs',
                 reviews: '/api/reviews',
                 users: '/api/users',
-                auditLogs: '/api/audit-logs'
+                auditLogs: '/api/audit-logs',
+                tickets: '/api/tickets',
+                csEvents: '/api/cs/events',
+                csAdmins: '/api/cs/admins',
+                csSettings: '/api/cs/settings',
+                wsEndpoint: '/ws/cs'
             }
         });
     });
