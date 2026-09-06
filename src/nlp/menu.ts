@@ -60,7 +60,8 @@ export function getDynamicMenuItems(): DynamicMenuItem[] {
       "Indeks Pembangunan Manusia (IPM)",
       "Tenaga Kerja",
       "Produk Domestik Regional Bruto (PDRB)",
-      "Indeks Pembangunan Gender (IPG)",
+      "Pertanian dan Perkebunan",
+      "Dimensi Pendidikan (RLS & HLS)",
     ];
     defaultTopics.forEach((topic) => {
       const lower = topic.trim().toLowerCase();
