@@ -198,7 +198,7 @@ export function createWebServer() {
     app.get('/api/datasets', (req, res) => {
         const store = loadBackendStore();
         const { category, search, status } = req.query;
-        let list = [...store.datasets];
+        let list = store.datasets.filter(d => !d.is_deleted);
         if (status) {
             list = list.filter(d => d.status === status);
         }
@@ -223,7 +223,9 @@ export function createWebServer() {
     // GET /api/datasets/:id
     app.get('/api/datasets/:id', (req, res) => {
         const store = loadBackendStore();
-        const dataset = store.datasets.find(d => d.id === req.params.id);
+        const targetId = String(req.params.id || '').trim();
+        const targetCode = targetId.toUpperCase();
+        const dataset = store.datasets.find(d => !d.is_deleted && (d.id === targetId || d.code.trim().toUpperCase() === targetCode));
         if (!dataset) {
             res.status(404).json({ success: false, error: 'Dataset tidak ditemukan.' });
             return;
@@ -241,10 +243,11 @@ export function createWebServer() {
         }
         const now = new Date().toISOString();
         const targetId = body.id || `ds-${uid()}`;
-        const existingIdx = store.datasets.findIndex(d => d.id === targetId || d.code.trim().toUpperCase() === body.code.trim().toUpperCase());
+        const cleanCode = body.code.trim().toUpperCase();
+        const existingIdx = store.datasets.findIndex(d => d.id === targetId || d.code.trim().toUpperCase() === cleanCode);
         const newDataset = {
             id: existingIdx !== -1 ? store.datasets[existingIdx].id : targetId,
-            code: body.code.trim().toUpperCase(),
+            code: cleanCode,
             name: body.name.trim(),
             category: body.category.trim(),
             description: body.description || '',
@@ -258,13 +261,18 @@ export function createWebServer() {
             updated_by: body.updated_by || 'user-1',
             created_at: existingIdx !== -1 ? store.datasets[existingIdx].created_at : now,
             updated_at: now,
-            record_count: existingIdx !== -1 ? store.datasets[existingIdx].record_count || 0 : 0
+            record_count: existingIdx !== -1 ? store.datasets[existingIdx].record_count || 0 : 0,
+            is_deleted: false,
         };
         if (existingIdx !== -1) {
             store.datasets[existingIdx] = newDataset;
         }
         else {
             store.datasets.unshift(newDataset);
+        }
+        // Jika dataset ini sebelumnya pernah masuk deleted_dataset_ids, bersihkan
+        if (Array.isArray(store.deleted_dataset_ids)) {
+            store.deleted_dataset_ids = store.deleted_dataset_ids.filter(id => id !== newDataset.id);
         }
         // Audit log
         store.auditLogs.unshift({
@@ -284,7 +292,9 @@ export function createWebServer() {
     // PUT /api/datasets/:id
     app.put('/api/datasets/:id', (req, res) => {
         const store = loadBackendStore();
-        const idx = store.datasets.findIndex(d => d.id === req.params.id);
+        const targetId = String(req.params.id || '').trim();
+        const targetCode = targetId.toUpperCase();
+        const idx = store.datasets.findIndex(d => !d.is_deleted && (d.id === targetId || d.code.trim().toUpperCase() === targetCode));
         if (idx === -1) {
             res.status(404).json({ success: false, error: 'Dataset tidak ditemukan.' });
             return;
@@ -297,6 +307,7 @@ export function createWebServer() {
             ...body,
             id: existing.id,
             updated_at: now,
+            is_deleted: false,
         };
         store.datasets[idx] = updated;
         // Audit log
@@ -314,22 +325,85 @@ export function createWebServer() {
         saveBackendStore(store);
         res.json({ success: true, data: updated });
     });
-    // DELETE /api/datasets/:id
-    app.delete('/api/datasets/:id', (req, res) => {
+    // Eksekutor internal penghapusan dataset (tombstone & soft-delete)
+    const executeDeleteDataset = (targetId, req, res) => {
         const store = loadBackendStore();
-        const idx = store.datasets.findIndex(d => d.id === req.params.id);
+        const cleanId = String(targetId || '').trim();
+        const cleanCode = cleanId.toUpperCase();
+        const idx = store.datasets.findIndex(d => !d.is_deleted && (d.id === cleanId || d.code.trim().toUpperCase() === cleanCode));
         if (idx === -1) {
-            res.status(404).json({ success: false, error: 'Dataset tidak ditemukan.' });
+            res.status(404).json({ success: false, error: 'Dataset tidak ditemukan atau sudah terhapus.' });
             return;
         }
-        const deleted = store.datasets.splice(idx, 1)[0];
-        // soft delete associated records
+        const deleted = store.datasets[idx];
+        deleted.is_deleted = true;
+        deleted.updated_at = new Date().toISOString();
+        // Catat ID ke daftar deleted_dataset_ids permanen di backend store
+        if (!Array.isArray(store.deleted_dataset_ids)) {
+            store.deleted_dataset_ids = [];
+        }
+        if (!store.deleted_dataset_ids.includes(deleted.id)) {
+            store.deleted_dataset_ids.push(deleted.id);
+        }
+        // Soft delete associated records
+        let deletedRecordsCount = 0;
         store.records.forEach(r => {
-            if (r.dataset_id === deleted.id)
+            if (r.dataset_id === deleted.id && !r.is_deleted) {
                 r.is_deleted = true;
+                r.updated_at = new Date().toISOString();
+                deletedRecordsCount++;
+            }
+        });
+        const actorId = req.headers['x-user-id'] || (req.body && req.body.user_id) || 'user-1';
+        const actorName = store.users.find(u => u.id === actorId)?.name || 'Petugas';
+        // Audit log
+        store.auditLogs.unshift({
+            id: `log-${uid()}`,
+            entity_type: 'dataset',
+            entity_id: deleted.id,
+            entity_name: deleted.name,
+            action: AuditAction.DELETE,
+            changes: [{ field: 'status', old_value: deleted.status, new_value: 'DELETED' }],
+            user_id: actorId,
+            user_name: actorName,
+            created_at: new Date().toISOString()
         });
         saveBackendStore(store);
-        res.json({ success: true, message: 'Dataset berhasil dihapus.' });
+        syncAllPublishedToFAQ();
+        res.json({
+            success: true,
+            message: `Dataset "${deleted.name}" (${deleted.code}) berhasil dihapus.`,
+            data: {
+                id: deleted.id,
+                code: deleted.code,
+                deleted_records_count: deletedRecordsCount
+            }
+        });
+    };
+    // DELETE /api/datasets/:id
+    app.delete('/api/datasets/:id', (req, res) => {
+        executeDeleteDataset(String(req.params.id), req, res);
+    });
+    // DELETE /api/datasets (Support parameter via body { id } atau query ?id=...)
+    app.delete('/api/datasets', (req, res) => {
+        const id = (req.body && (req.body.id || req.body.dataset_id)) || req.query.id || req.query.dataset_id;
+        if (!id) {
+            res.status(400).json({ success: false, error: 'ID atau kode dataset wajib disertakan.' });
+            return;
+        }
+        executeDeleteDataset(String(id), req, res);
+    });
+    // POST /api/datasets/:id/delete & POST /api/datasets/delete (Kompatibilitas alternatif)
+    app.post('/api/datasets/:id/delete', (req, res) => {
+        executeDeleteDataset(String(req.params.id), req, res);
+    });
+    app.post('/api/datasets/delete', (req, res) => {
+        const id = (req.body && (req.body.id || req.body.dataset_id)) || req.query.id || req.query.dataset_id;
+        if (!id) {
+            res.status(400).json({ success: false, error: 'ID atau kode dataset wajib disertakan.' });
+            return;
+        }
+        executeDeleteDataset(String(id), req, res);
     });
     // ============================================================
     // 2. DATA RECORDS REST API
@@ -776,7 +850,7 @@ export function createWebServer() {
         // Sertakan jumlah dataset aktif per kategori
         const listWithCount = store.categories.map(c => ({
             ...c,
-            dataset_count: store.datasets.filter(d => d.category.toLowerCase().trim() === c.name.toLowerCase().trim()).length
+            dataset_count: store.datasets.filter(d => !d.is_deleted && d.category.toLowerCase().trim() === c.name.toLowerCase().trim()).length
         }));
         res.json({ success: true, data: listWithCount });
     });
@@ -859,12 +933,14 @@ export function createWebServer() {
         res.json({
             success: true,
             data: {
-                datasets: store.datasets,
+                datasets: store.datasets.filter(d => !d.is_deleted),
                 records: store.records.filter(r => !r.is_deleted),
                 categories: store.categories,
                 users: store.users,
                 reviews: store.reviews,
                 auditLogs: store.auditLogs,
+                deleted_dataset_ids: store.deleted_dataset_ids || [],
+                deleted_record_ids: store.records.filter(r => r.is_deleted).map(r => r.id),
             }
         });
     });
@@ -873,16 +949,30 @@ export function createWebServer() {
         const store = loadBackendStore();
         const { datasets, records, categories, users, reviews, auditLogs, deleted_dataset_ids, deleted_record_ids } = req.body;
         let modified = false;
+        // Inisialisasi daftar id dataset terhapus jika belum ada
+        if (!Array.isArray(store.deleted_dataset_ids)) {
+            store.deleted_dataset_ids = [];
+        }
+        const globalDeletedDsSet = new Set(store.deleted_dataset_ids);
         // 1. Tangani Penghapusan Dataset yang diminta frontend
         if (Array.isArray(deleted_dataset_ids) && deleted_dataset_ids.length > 0) {
-            const delDsSet = new Set(deleted_dataset_ids);
-            const prevCount = store.datasets.length;
-            store.datasets = store.datasets.filter(d => !delDsSet.has(d.id));
-            if (store.datasets.length !== prevCount)
-                modified = true;
+            for (const delId of deleted_dataset_ids) {
+                if (!delId)
+                    continue;
+                globalDeletedDsSet.add(delId);
+                if (!store.deleted_dataset_ids.includes(delId)) {
+                    store.deleted_dataset_ids.push(delId);
+                    modified = true;
+                }
+                const target = store.datasets.find(d => d.id === delId);
+                if (target && !target.is_deleted) {
+                    target.is_deleted = true;
+                    modified = true;
+                }
+            }
             // Soft-delete records milik dataset yang dihapus
             store.records.forEach(r => {
-                if (delDsSet.has(r.dataset_id) && !r.is_deleted) {
+                if (globalDeletedDsSet.has(r.dataset_id) && !r.is_deleted) {
                     r.is_deleted = true;
                     modified = true;
                 }
@@ -920,17 +1010,25 @@ export function createWebServer() {
                 }
             }
         }
-        // Merge Datasets
+        // Merge Datasets (Mencegah dataset yang sudah terhapus bangkit kembali)
         if (Array.isArray(datasets)) {
             for (const ds of datasets) {
                 if (!ds.id)
                     continue;
+                // JANGAN hidupkan kembali dataset yang sudah terhapus!
+                if (globalDeletedDsSet.has(ds.id) || ds.is_deleted) {
+                    continue;
+                }
                 const existingIdx = store.datasets.findIndex(sd => sd.id === ds.id || sd.code.toUpperCase() === ds.code.toUpperCase());
                 if (existingIdx === -1) {
-                    store.datasets.push(ds);
+                    store.datasets.push({ ...ds, is_deleted: false });
                     modified = true;
                 }
                 else {
+                    // Jika dataset di backend sudah berstatus terhapus, abaikan update dari frontend
+                    if (store.datasets[existingIdx].is_deleted) {
+                        continue;
+                    }
                     // If frontend has newer updated_at
                     if (ds.updated_at && (!store.datasets[existingIdx].updated_at || new Date(ds.updated_at) > new Date(store.datasets[existingIdx].updated_at))) {
                         store.datasets[existingIdx] = { ...store.datasets[existingIdx], ...ds };
@@ -996,12 +1094,14 @@ export function createWebServer() {
             success: true,
             message: 'Database backend berhasil disinkronkan.',
             data: {
-                datasets: store.datasets,
+                datasets: store.datasets.filter(d => !d.is_deleted),
                 records: store.records.filter(r => !r.is_deleted),
                 categories: store.categories,
                 users: store.users,
                 reviews: store.reviews,
                 auditLogs: store.auditLogs,
+                deleted_dataset_ids: store.deleted_dataset_ids || [],
+                deleted_record_ids: store.records.filter(r => r.is_deleted).map(r => r.id),
             }
         });
     });
@@ -1010,7 +1110,7 @@ export function createWebServer() {
         const store = loadBackendStore();
         const activeRecords = store.records.filter(r => !r.is_deleted);
         const summary = {
-            total_datasets: store.datasets.length,
+            total_datasets: store.datasets.filter(d => !d.is_deleted).length,
             published_records: activeRecords.filter(r => r.status === DataStatus.PUBLISHED).length,
             draft_records: activeRecords.filter(r => r.status === DataStatus.DRAFT).length,
             pending_review: store.reviews.filter(r => r.status === 'PENDING').length

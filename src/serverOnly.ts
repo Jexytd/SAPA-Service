@@ -11,8 +11,9 @@ console.log('   SAPA BPS KAB. BANGKA - [1] SERVER NLP & REST API (API ONLY)');
 console.log('===========================================================\n');
 
 const store = loadBackendStore();
-const publishedCount = store.datasets.filter(d => d.status === DataStatus.PUBLISHED).length;
-console.log(`[OK] Mesin NLP aktif dengan ${store.datasets.length} dataset (${publishedCount} terpublikasi) dan ${store.records.length} rekaman data statistik resmi dari db.json.`);
+const activeDatasets = store.datasets.filter(d => !d.is_deleted);
+const publishedCount = activeDatasets.filter(d => d.status === DataStatus.PUBLISHED).length;
+console.log(`[OK] Mesin NLP aktif dengan ${activeDatasets.length} dataset (${publishedCount} terpublikasi) dan ${store.records.filter(r => !r.is_deleted).length} rekaman data statistik resmi dari db.json.`);
 
 const app = createWebServer();
 

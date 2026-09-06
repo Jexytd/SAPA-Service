@@ -62,7 +62,7 @@ DATA RESMI STATISTIK BPS KABUPATEN BANGKA (SUMBER RESMI: INDIKATOR MAKRO 2025):
 export function buildDynamicContext() {
     try {
         const store = loadBackendStore();
-        const publishedDatasets = store.datasets.filter(d => d.status === DataStatus.PUBLISHED);
+        const publishedDatasets = store.datasets.filter(d => d.status === DataStatus.PUBLISHED && !d.is_deleted);
         if (publishedDatasets.length === 0)
             return '';
         const sections = [];

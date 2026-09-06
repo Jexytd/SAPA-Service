@@ -53,6 +53,7 @@ export interface Dataset {
   created_at: string;
   updated_at: string;
   record_count?: number;
+  is_deleted?: boolean;
 }
 
 export interface DataRecord {
@@ -139,6 +140,7 @@ export interface BackendStore {
   auditLogs: AuditLog[];
   categories: Category[];
   customFaqs?: CustomFAQ[];
+  deleted_dataset_ids?: string[];
 }
 
 const DEFAULT_USERS: User[] = [
@@ -157,6 +159,9 @@ export function loadBackendStore(): BackendStore {
       const content = fs.readFileSync(STORE_FILE, 'utf-8');
       globalStore = JSON.parse(content);
       if (globalStore && Array.isArray(globalStore.datasets)) {
+        if (!Array.isArray(globalStore.deleted_dataset_ids)) {
+          globalStore.deleted_dataset_ids = [];
+        }
         return globalStore;
       }
     } catch (err) {
@@ -171,6 +176,7 @@ export function loadBackendStore(): BackendStore {
     reviews: [],
     auditLogs: [],
     categories: [],
+    deleted_dataset_ids: [],
   };
 
   saveBackendStore(globalStore);
@@ -195,7 +201,7 @@ export function getFAQDataFromStore(): Record<string, string> {
   const store = loadBackendStore();
   const faq: Record<string, string> = {};
 
-  const publishedDs = store.datasets.filter(d => d.status === DataStatus.PUBLISHED);
+  const publishedDs = store.datasets.filter(d => d.status === DataStatus.PUBLISHED && !d.is_deleted);
 
   for (const ds of publishedDs) {
     const recs = store.records

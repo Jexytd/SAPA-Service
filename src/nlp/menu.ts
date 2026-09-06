@@ -24,7 +24,7 @@ export function getDynamicMenuItems(): DynamicMenuItem[] {
   try {
     const store = loadBackendStore();
     publishedDatasets = store.datasets.filter((d) => {
-      if (d.status !== DataStatus.PUBLISHED) return false;
+      if (d.status !== DataStatus.PUBLISHED || d.is_deleted) return false;
       const recCount = store.records.filter((r) => r.dataset_id === d.id && r.status === DataStatus.PUBLISHED && !r.is_deleted && r.value !== null).length;
       return recCount > 0;
     });

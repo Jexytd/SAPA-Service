@@ -20,8 +20,9 @@ async function bootstrap() {
 
   // 2. Load Data Statistik dari db.json
   const store = loadBackendStore();
-  const publishedCount = store.datasets.filter(d => d.status === DataStatus.PUBLISHED).length;
-  console.log(`[INFO] Berhasil memuat ${store.datasets.length} dataset (${publishedCount} terpublikasi) dan ${store.records.length} rekaman data statistik resmi dari db.json BPS Kab. Bangka.`);
+  const activeDatasets = store.datasets.filter(d => !d.is_deleted);
+  const publishedCount = activeDatasets.filter(d => d.status === DataStatus.PUBLISHED).length;
+  console.log(`[INFO] Berhasil memuat ${activeDatasets.length} dataset (${publishedCount} terpublikasi) dan ${store.records.filter(r => !r.is_deleted).length} rekaman data statistik resmi dari db.json BPS Kab. Bangka.`);
 
   // 3. Jalankan Express REST API Server (CRUD & Bot Gateway)
   const app = createWebServer();

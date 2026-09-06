@@ -245,7 +245,7 @@ function tryExtractGranularKB(rawMessage) {
 export function getPublishedDatasetResponse(datasetQuery, specifiedYears = []) {
     try {
         const store = loadBackendStore();
-        const publishedDatasets = store.datasets.filter(d => d.status === DataStatus.PUBLISHED);
+        const publishedDatasets = store.datasets.filter(d => d.status === DataStatus.PUBLISHED && !d.is_deleted);
         if (publishedDatasets.length === 0)
             return null;
         // Filter kandidat yang memiliki data riil (record count > 0) terlebih dahulu
@@ -466,7 +466,7 @@ export async function processUserMessage(rawMessage, imageBase64, sessionId = 'd
             const store = loadBackendStore();
             const targetCategory = (matchedItem.datasetCategory || matchedItem.label).trim().toLowerCase();
             const categoryDatasets = store.datasets.filter((d) => {
-                if (d.status !== DataStatus.PUBLISHED)
+                if (d.status !== DataStatus.PUBLISHED || d.is_deleted)
                     return false;
                 const recCount = store.records.filter((r) => r.dataset_id === d.id && r.status === DataStatus.PUBLISHED && !r.is_deleted && r.value !== null).length;
                 if (recCount === 0)

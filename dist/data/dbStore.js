@@ -48,6 +48,9 @@ export function loadBackendStore() {
             const content = fs.readFileSync(STORE_FILE, 'utf-8');
             globalStore = JSON.parse(content);
             if (globalStore && Array.isArray(globalStore.datasets)) {
+                if (!Array.isArray(globalStore.deleted_dataset_ids)) {
+                    globalStore.deleted_dataset_ids = [];
+                }
                 return globalStore;
             }
         }
@@ -62,6 +65,7 @@ export function loadBackendStore() {
         reviews: [],
         auditLogs: [],
         categories: [],
+        deleted_dataset_ids: [],
     };
     saveBackendStore(globalStore);
     return globalStore;
@@ -83,7 +87,7 @@ export function saveBackendStore(store) {
 export function getFAQDataFromStore() {
     const store = loadBackendStore();
     const faq = {};
-    const publishedDs = store.datasets.filter(d => d.status === DataStatus.PUBLISHED);
+    const publishedDs = store.datasets.filter(d => d.status === DataStatus.PUBLISHED && !d.is_deleted);
     for (const ds of publishedDs) {
         const recs = store.records
             .filter(r => r.dataset_id === ds.id && r.status === DataStatus.PUBLISHED && !r.is_deleted && r.value !== null)
