@@ -210,8 +210,8 @@ export function getWhatsAppSocket(): WASocket | null {
   return currentSocket;
 }
 
+export type { WhatsAppTargetInfo } from './whatsappUtils.js';
 export {
-  WhatsAppTargetInfo,
   resolveWhatsAppTarget,
   sendWhatsAppMessageSafe
 } from './whatsappUtils.js';
