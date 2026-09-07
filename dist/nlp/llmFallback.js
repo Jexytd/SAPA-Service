@@ -1,10 +1,167 @@
 import axios from 'axios';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { loadBackendStore, DataStatus } from '../data/dbStore.js';
+import { getDBPool } from '../data/database.js';
 dotenv.config();
-const GROQ_API_KEY = process.env.GROQ_API_KEY || '';
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_MODEL = process.env.GROQ_MODEL || 'groq/compound-mini';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const ENV_PATH = path.resolve(__dirname, '../../.env');
+export const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+let activeGroqApiKey = process.env.GROQ_API_KEY || '';
+let activeGroqModel = process.env.GROQ_MODEL || 'groq/compound-mini';
+let isGroqConfigInitialized = false;
+/**
+ * Sinkronisasi update langsung ke file .env di disk agar persist saat server direstart
+ */
+export function updateEnvFile(key, value) {
+    try {
+        if (!fs.existsSync(ENV_PATH))
+            return;
+        let content = fs.readFileSync(ENV_PATH, 'utf-8');
+        const regex = new RegExp(`^${key}=.*$`, 'm');
+        if (regex.test(content)) {
+            content = content.replace(regex, `${key}=${value}`);
+        }
+        else {
+            content += `\n${key}=${value}\n`;
+        }
+        fs.writeFileSync(ENV_PATH, content, 'utf-8');
+    }
+    catch (err) {
+        console.warn('[WARN] Gagal memperbarui file .env:', err?.message);
+    }
+}
+/**
+ * Memuat konfigurasi Groq API dari tabel MySQL settings saat startup
+ */
+export async function initGroqConfigFromDB() {
+    try {
+        const pool = getDBPool();
+        if (!pool)
+            return;
+        const [rows] = await pool.query("SELECT setting_key, setting_value FROM settings WHERE setting_key IN ('groq_api_key', 'groq_model')");
+        for (const r of rows) {
+            if (r.setting_key === 'groq_api_key' && r.setting_value) {
+                activeGroqApiKey = r.setting_value.trim();
+                process.env.GROQ_API_KEY = activeGroqApiKey;
+            }
+            if (r.setting_key === 'groq_model' && r.setting_value) {
+                activeGroqModel = r.setting_value.trim();
+                process.env.GROQ_MODEL = activeGroqModel;
+            }
+        }
+        isGroqConfigInitialized = true;
+    }
+    catch (err) {
+        console.warn('[WARN] Gagal memuat konfigurasi Groq dari database:', err?.message);
+    }
+}
+/**
+ * Mengambil token Groq API aktif (Prioritas: Database > Runtime Cache > .env)
+ */
+export async function getGroqApiKey() {
+    if (!isGroqConfigInitialized) {
+        await initGroqConfigFromDB();
+    }
+    return activeGroqApiKey || process.env.GROQ_API_KEY || '';
+}
+/**
+ * Mengambil model Groq aktif
+ */
+export async function getGroqModel() {
+    if (!isGroqConfigInitialized) {
+        await initGroqConfigFromDB();
+    }
+    return activeGroqModel || process.env.GROQ_MODEL || 'groq/compound-mini';
+}
+/**
+ * Mengubah token / model Groq API secara dinamis tanpa perlu commit GitHub
+ */
+export async function setGroqConfig(apiKey, model) {
+    if (apiKey !== undefined && apiKey !== null) {
+        activeGroqApiKey = apiKey.trim();
+        process.env.GROQ_API_KEY = activeGroqApiKey;
+        updateEnvFile('GROQ_API_KEY', activeGroqApiKey);
+    }
+    if (model !== undefined && model !== null && model.trim()) {
+        activeGroqModel = model.trim();
+        process.env.GROQ_MODEL = activeGroqModel;
+        updateEnvFile('GROQ_MODEL', activeGroqModel);
+    }
+    isGroqConfigInitialized = true;
+    try {
+        const pool = getDBPool();
+        if (pool) {
+            if (apiKey !== undefined && apiKey !== null) {
+                await pool.query('INSERT INTO settings (setting_key, setting_value, description, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP', ['groq_api_key', activeGroqApiKey, 'Token API Groq Cloud untuk fallback LLM AI SAPA']);
+            }
+            if (model !== undefined && model !== null && model.trim()) {
+                await pool.query('INSERT INTO settings (setting_key, setting_value, description, updated_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP', ['groq_model', activeGroqModel, 'Model LLM Groq Cloud yang digunakan']);
+            }
+        }
+    }
+    catch (err) {
+        console.warn('[WARN] Gagal menyimpan setting groq ke database:', err?.message);
+    }
+    return { success: true, message: 'Token Groq API berhasil diperbarui secara dinamis tanpa commit GitHub.' };
+}
+/**
+ * Helper sensor kunci API agar aman ditampilkan di UI
+ */
+export function maskApiKey(key) {
+    if (!key)
+        return '';
+    if (key.length <= 8)
+        return '***';
+    return `${key.slice(0, 7)}...${key.slice(-4)}`;
+}
+/**
+ * Uji koneksi kunci Groq API ke server Groq Cloud
+ */
+export async function testGroqApiKey(keyToTest, modelToTest) {
+    const key = keyToTest || await getGroqApiKey();
+    const model = modelToTest || await getGroqModel();
+    if (!key) {
+        return { valid: false, message: 'Kunci API Groq kosong / belum diatur', error: 'API key is empty' };
+    }
+    if (!key.startsWith('gsk_')) {
+        return { valid: false, message: 'Format Kunci API Groq tidak valid (harus diawali "gsk_")', error: 'Invalid key prefix' };
+    }
+    const startTime = Date.now();
+    try {
+        const response = await axios.post(GROQ_API_URL, {
+            model: model,
+            messages: [{ role: 'user', content: 'Tes koneksi singkat. Jawab OK.' }],
+            max_tokens: 10,
+            temperature: 0.1
+        }, {
+            headers: {
+                'Authorization': `Bearer ${key}`,
+                'Content-Type': 'application/json'
+            },
+            timeout: 10000
+        });
+        const latencyMs = Date.now() - startTime;
+        const snippet = response.data?.choices?.[0]?.message?.content?.trim() || 'OK';
+        return {
+            valid: true,
+            message: `Koneksi ke Groq Cloud API berhasil (${latencyMs}ms)`,
+            latencyMs,
+            responseSnippet: snippet
+        };
+    }
+    catch (err) {
+        const errMsg = err?.response?.data?.error?.message || err?.message || 'Gagal menghubungi Groq API';
+        return {
+            valid: false,
+            message: `Uji koneksi Groq gagal: ${errMsg}`,
+            error: errMsg
+        };
+    }
+}
 const LOCAL_LLM_URL = process.env.LOCAL_LLM_URL || 'http://127.0.0.1:1234/v1/chat/completions';
 const LOCAL_LLM_MODEL = process.env.LOCAL_LLM_MODEL || 'qwen2-vl-2b-instruct';
 export const BPS_KNOWLEDGE_CONTEXT = `
@@ -120,11 +277,13 @@ export function getSystemPrompt() {
 }
 export async function queryAI(userPrompt, imageBase64) {
     const systemPrompt = getSystemPrompt();
-    // 1. Prioritas Utama: Jika GROQ_API_KEY ada, gunakan Groq Cloud API
-    if (GROQ_API_KEY && GROQ_API_KEY.startsWith('gsk_')) {
+    const apiKey = await getGroqApiKey();
+    const model = await getGroqModel();
+    // 1. Prioritas Utama: Jika apiKey ada dan diawali gsk_, gunakan Groq Cloud API
+    if (apiKey && apiKey.startsWith('gsk_')) {
         try {
             const response = await axios.post(GROQ_API_URL, {
-                model: GROQ_MODEL,
+                model: model,
                 messages: [
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: userPrompt }
@@ -133,7 +292,7 @@ export async function queryAI(userPrompt, imageBase64) {
                 max_tokens: 600
             }, {
                 headers: {
-                    'Authorization': `Bearer ${GROQ_API_KEY}`,
+                    'Authorization': `Bearer ${apiKey}`,
                     'Content-Type': 'application/json'
                 },
                 timeout: 10000

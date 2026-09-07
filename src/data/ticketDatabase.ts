@@ -1,5 +1,6 @@
 import { getDBPool } from './database.js';
 import crypto from 'crypto';
+import { initGroqConfigFromDB } from '../nlp/llmFallback.js';
 
 export async function initTicketDatabase(): Promise<void> {
   const pool = getDBPool();
@@ -134,7 +135,9 @@ export async function initTicketDatabase(): Promise<void> {
         ['template_pending', '⏳ *Status Tiket Ditunda (PENDING)*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTiket *#{ticket_number}* saat ini berstatus PENDING.\n{reason}\n\nPetugas kami sedang menindaklanjuti permintaan Anda. Mohon ditunggu.', 'Template pesan saat status tiket diubah ke PENDING'],
         ['template_resolved', '✅ *Konsultasi Selesai (Tiket #{ticket_number})*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCustomer Service telah menandai percakapan ini selesai.\n\nTerima kasih telah berkonsultasi dengan Layanan PST BPS Kab. Bangka. Layanan asisten bot otomatis kini telah aktif kembali. Silakan ketik *menu* jika membutuhkan informasi lainnya.', 'Template pesan saat tiket diselesaikan (selesai)'],
         ['template_closed', '🔒 *Percakapan Ditutup*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPercakapan untuk Tiket *#{ticket_number}* telah ditutup.\n\nTerima kasih telah menghubungi Layanan BPS Kab. Bangka. Asisten bot otomatis kini telah aktif kembali. Silakan ketik *menu* jika ingin memulai interaksi baru.', 'Template pesan saat tiket ditutup permanen'],
-        ['template_admin_message', '{message}', 'Format template pesan chat admin ke customer (gunakan {message} dan opsional {admin_name})']
+        ['template_admin_message', '{message}', 'Format template pesan chat admin ke customer (gunakan {message} dan opsional {admin_name})'],
+        ['groq_api_key', process.env.GROQ_API_KEY || '', 'Token API Groq Cloud untuk fallback LLM AI SAPA'],
+        ['groq_model', process.env.GROQ_MODEL || 'groq/compound-mini', 'Model LLM Groq Cloud yang digunakan']
       ];
       for (const [k, v, d] of defaultSettings) {
         await connection.query(
@@ -172,6 +175,7 @@ export async function initTicketDatabase(): Promise<void> {
       }
 
       console.log('[DB TICKET] Seluruh skema tabel Customer Service & Ticketing berhasil diinisialisasi di MySQL/TiDB.');
+      await initGroqConfigFromDB();
     } finally {
       connection.release();
     }

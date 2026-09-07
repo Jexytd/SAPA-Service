@@ -2,6 +2,14 @@ import { Router, Request, Response } from 'express';
 import { ticketService } from '../services/ticketService.js';
 import { realtimeHub } from '../services/realtimeHub.js';
 import { getWhatsAppSocket, sendWhatsAppMessageSafe, resolveWhatsAppTarget } from '../bot/whatsapp.js';
+import {
+  getGroqApiKey,
+  getGroqModel,
+  setGroqConfig,
+  maskApiKey,
+  testGroqApiKey,
+  GROQ_API_URL
+} from '../nlp/llmFallback.js';
 
 export function createTicketRouter(): Router {
   const router = Router();
@@ -38,8 +46,15 @@ export function createTicketRouter(): Router {
     try {
       const payload = (req.body && typeof req.body.settings === 'object') ? req.body.settings : req.body;
       if (typeof payload === 'object' && payload !== null) {
+        let newGroqKey: string | undefined = undefined;
+        let newGroqModel: string | undefined = undefined;
         for (const [k, v] of Object.entries(payload)) {
           await ticketService.updateSetting(k, String(v));
+          if (k === 'groq_api_key') newGroqKey = String(v);
+          if (k === 'groq_model') newGroqModel = String(v);
+        }
+        if (newGroqKey !== undefined || newGroqModel !== undefined) {
+          await setGroqConfig(newGroqKey, newGroqModel);
         }
       }
       const updated = await ticketService.getSettings();
@@ -48,6 +63,102 @@ export function createTicketRouter(): Router {
       res.status(500).json({ success: false, error: err.message });
     }
   });
+
+  // ============================================================
+  // GROQ API CONFIGURATION (DINAMIS TANPA COMMIT GITHUB)
+  // ============================================================
+
+  // Helper GET konfigurasi Groq API aktif
+  const handleGetGroqConfig = async (req: Request, res: Response) => {
+    try {
+      const apiKey = await getGroqApiKey();
+      const model = await getGroqModel();
+      res.json({
+        success: true,
+        data: {
+          isConfigured: Boolean(apiKey && apiKey.length > 5),
+          apiKeyMasked: maskApiKey(apiKey),
+          model: model,
+          apiUrl: GROQ_API_URL
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  };
+
+  // Helper POST / PUT ubah token & model Groq API
+  const handleSetGroqConfig = async (req: Request, res: Response) => {
+    try {
+      const { apiKey, model, testBeforeSave, force } = req.body || {};
+
+      if (apiKey === undefined && model === undefined) {
+        return res.status(400).json({
+          success: false,
+          error: 'Parameter apiKey atau model wajib disertakan dalam request body'
+        });
+      }
+
+      if (apiKey && typeof apiKey === 'string' && !apiKey.startsWith('gsk_') && !force) {
+        return res.status(400).json({
+          success: false,
+          error: 'Format Groq API Key tidak valid. Groq API Key resmi harus diawali dengan "gsk_". Tambahkan force: true jika tetap ingin menyimpan tanpa validasi format.'
+        });
+      }
+
+      // Validasi koneksi langsung ke Groq Cloud jika diminta
+      if (testBeforeSave && apiKey) {
+        const testResult = await testGroqApiKey(apiKey, model);
+        if (!testResult.valid && !force) {
+          return res.status(400).json({
+            success: false,
+            error: `Gagal memvalidasi token Groq ke server Groq Cloud: ${testResult.message}`,
+            details: testResult
+          });
+        }
+      }
+
+      const result = await setGroqConfig(apiKey, model);
+      const activeKey = await getGroqApiKey();
+      const activeModel = await getGroqModel();
+
+      res.json({
+        success: true,
+        message: result.message,
+        data: {
+          isConfigured: Boolean(activeKey && activeKey.length > 5),
+          apiKeyMasked: maskApiKey(activeKey),
+          model: activeModel
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  };
+
+  // Helper uji coba koneksi token Groq ke server Groq Cloud
+  const handleTestGroqConfig = async (req: Request, res: Response) => {
+    try {
+      const { apiKey, model } = req.body || {};
+      const testResult = await testGroqApiKey(apiKey, model);
+      res.status(testResult.valid ? 200 : 400).json({
+        success: testResult.valid,
+        message: testResult.message,
+        data: testResult
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  };
+
+  router.get('/groq-config', handleGetGroqConfig);
+  router.get('/cs/groq-config', handleGetGroqConfig);
+  router.post('/groq-config', handleSetGroqConfig);
+  router.post('/cs/groq-config', handleSetGroqConfig);
+  router.put('/groq-config', handleSetGroqConfig);
+  router.put('/cs/groq-config', handleSetGroqConfig);
+  router.post('/groq-config/test', handleTestGroqConfig);
+  router.post('/cs/groq-config/test', handleTestGroqConfig);
 
   // 5. POST /api/tickets - Buat tiket baru secara manual/programatik
   router.post('/tickets', async (req: Request, res: Response) => {
