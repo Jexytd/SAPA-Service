@@ -36,9 +36,9 @@ export function createTicketRouter(): Router {
   // 4. PUT /api/cs/settings - Update konfigurasi Customer Service
   router.put('/cs/settings', async (req: Request, res: Response) => {
     try {
-      const { settings } = req.body;
-      if (typeof settings === 'object') {
-        for (const [k, v] of Object.entries(settings)) {
+      const payload = (req.body && typeof req.body.settings === 'object') ? req.body.settings : req.body;
+      if (typeof payload === 'object' && payload !== null) {
+        for (const [k, v] of Object.entries(payload)) {
           await ticketService.updateSetting(k, String(v));
         }
       }
@@ -136,11 +136,22 @@ export function createTicketRouter(): Router {
       const sock = getWhatsAppSocket();
       const ticket = result.ticket;
       if (sock && ticket && ticket.user_phone) {
-        const jid = `${ticket.user_phone}@s.whatsapp.net`;
+        const cleanPhone = ticket.user_phone.replace(/[^0-9]/g, '');
+        const jid = `${cleanPhone}@s.whatsapp.net`;
         const adminName = ticket.admin_name || 'Petugas CS';
         sock.sendMessage(jid, {
           text: `💬 *Customer Service Terhubung*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCustomer Service *${adminName}* telah mengambil tiket Anda (*#${ticket.ticket_number}*) dan siap melayani.\n\nSilakan sampaikan pertanyaan atau kendala Anda secara rinci.`
-        }).catch(() => {});
+        }).then(() => {
+          console.log(`[WA NOTIF] Notifikasi CS terhubung terkirim ke WhatsApp ${cleanPhone} (Tiket #${ticket.ticket_number})`);
+        }).catch((waErr: any) => {
+          console.error(`[ERROR WA NOTIF] Gagal mengirim pesan CS terhubung ke ${cleanPhone}:`, waErr?.message || waErr);
+        });
+      } else {
+        if (!sock) {
+          console.warn(`[WARN WA NOTIF] WhatsApp bot belum terhubung/login, pesan notifikasi tiket #${ticket?.ticket_number} belum dapat dikirim.`);
+        } else if (!ticket?.user_phone) {
+          console.warn(`[WARN WA NOTIF] Nomor telepon pengguna tidak ditemukan pada tiket #${ticket?.ticket_number}.`);
+        }
       }
 
       res.json({
@@ -184,11 +195,15 @@ export function createTicketRouter(): Router {
       // 2. Kirim pesan secara langsung ke WhatsApp Pengguna
       const sock = getWhatsAppSocket();
       if (sock && ticket.user_phone) {
-        const jid = `${ticket.user_phone}@s.whatsapp.net`;
+        const cleanPhone = ticket.user_phone.replace(/[^0-9]/g, '');
+        const jid = `${cleanPhone}@s.whatsapp.net`;
         const adminName = ticket.admin_name || 'Customer Service';
         const formattedMsg = `*${adminName} (CS BPS Bangka):*\n${message}\n\n_Ketik #selesai untuk mengakhiri sesi CS._`;
 
-        const sent = await sock.sendMessage(jid, { text: formattedMsg });
+        const sent = await sock.sendMessage(jid, { text: formattedMsg }).catch((waErr: any) => {
+          console.error(`[ERROR WA SEND MESSAGE] Gagal kirim balasan admin ke ${cleanPhone}:`, waErr?.message || waErr);
+          return null;
+        });
         if (sent?.key?.id) {
           msg.external_message_id = sent.key.id;
         }

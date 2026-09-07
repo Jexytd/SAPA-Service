@@ -1,6 +1,34 @@
 import { getDBPool } from '../data/database.js';
 import { realtimeHub } from './realtimeHub.js';
 import crypto from 'crypto';
+/**
+ * Helper untuk menghasilkan string datetime Waktu Indonesia Barat (WIB / UTC+7)
+ * Format MySQL DATETIME: YYYY-MM-DD HH:mm:ss
+ */
+export function getWIBDateTime(d = new Date()) {
+    try {
+        return new Intl.DateTimeFormat('sv-SE', {
+            timeZone: 'Asia/Jakarta',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        }).format(d).replace('T', ' ');
+    }
+    catch {
+        const wib = new Date(d.getTime() + 7 * 3600 * 1000);
+        return wib.toISOString().slice(0, 19).replace('T', ' ');
+    }
+}
+/**
+ * Helper untuk menghasilkan kode tanggal YYYYMMDD dalam WIB (untuk prefix nomor tiket)
+ */
+export function getWIBDateCode(d = new Date()) {
+    return getWIBDateTime(d).slice(0, 10).replace(/-/g, '');
+}
 export class TicketService {
     static instance;
     static getInstance() {
@@ -27,12 +55,13 @@ export class TicketService {
             }
             return rows[0];
         }
+        const nowStr = getWIBDateTime();
         const newUser = {
             id: this.uuid(),
             phone_number: cleanPhone,
             name: name || `Pengguna WhatsApp (${cleanPhone.slice(-4)})`,
-            created_at: new Date().toISOString().slice(0, 19).replace('T', ' '),
-            updated_at: new Date().toISOString().slice(0, 19).replace('T', ' ')
+            created_at: nowStr,
+            updated_at: nowStr
         };
         await pool.query('INSERT INTO users (id, phone_number, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)', [newUser.id, newUser.phone_number, newUser.name, newUser.created_at, newUser.updated_at]);
         return newUser;
@@ -53,11 +82,10 @@ export class TicketService {
     `, [cleanPhone]);
         return rows.length > 0 ? rows[0] : null;
     }
-    // 3. GENERATE NOMOR TIKET UNIK (TK-YYYYMMDD-XXXX)
+    // 3. GENERATE NOMOR TIKET UNIK (TK-YYYYMMDD-XXXX dalam WIB)
     async generateTicketNumber() {
         const pool = getDBPool();
-        const now = new Date();
-        const dateStr = now.toISOString().slice(0, 10).replace(/-/g, ''); // 20260905
+        const dateStr = getWIBDateCode(); // 20260907 dalam WIB
         const prefix = `TK-${dateStr}-`;
         if (pool) {
             const [rows] = await pool.query(`SELECT COUNT(*) as cnt FROM tickets WHERE ticket_number LIKE ?`, [`${prefix}%`]);
@@ -79,7 +107,7 @@ export class TicketService {
         }
         const ticketNumber = await this.generateTicketNumber();
         const ticketId = this.uuid();
-        const nowStr = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        const nowStr = getWIBDateTime();
         await pool.query(`
       INSERT INTO tickets (
         id, ticket_number, user_id, status, mode, last_message_at, unread_admin_count, created_at, updated_at
@@ -121,15 +149,16 @@ export class TicketService {
         const connection = await pool.getConnection();
         try {
             await connection.beginTransaction();
+            const nowStr = getWIBDateTime();
             // ATOMIC UPDATE DENGAN ROW-LOCKING: Hanya berhasil jika status masih WAITING dan belum di-assign
             const [updateResult] = await connection.query(`
         UPDATE tickets 
         SET status = 'ASSIGNED', 
             assigned_to = ?, 
-            assigned_at = CURRENT_TIMESTAMP, 
-            updated_at = CURRENT_TIMESTAMP
+            assigned_at = ?, 
+            updated_at = ?
         WHERE id = ? AND status = 'WAITING' AND (assigned_to IS NULL OR assigned_to = '')
-      `, [adminId, ticketId]);
+      `, [adminId, nowStr, nowStr, ticketId]);
             if (updateResult.affectedRows === 0) {
                 await connection.rollback();
                 // Cek siapa yang mengambil
@@ -149,8 +178,8 @@ export class TicketService {
             const assignId = this.uuid();
             await connection.query(`
         INSERT INTO ticket_assignments (id, ticket_id, admin_id, assigned_by, assigned_at)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-      `, [assignId, ticketId, adminId, assignedBy || adminId]);
+        VALUES (?, ?, ?, ?, ?)
+      `, [assignId, ticketId, adminId, assignedBy || adminId, nowStr]);
             // Catat audit event
             await this.recordEventWithConn(connection, ticketId, 'ADMIN', adminId, 'ticket_assigned', { status: 'WAITING' }, { status: 'ASSIGNED', assigned_to: adminId });
             await connection.commit();
@@ -173,7 +202,7 @@ export class TicketService {
         if (!pool)
             throw new Error('Database pool tidak tersedia');
         const msgId = this.uuid();
-        const nowStr = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        const nowStr = getWIBDateTime();
         await pool.query(`
       INSERT INTO messages (
         id, ticket_id, sender_type, sender_id, message, message_type, external_message_id, metadata, created_at
@@ -255,7 +284,7 @@ export class TicketService {
         if (!['ACTIVE', 'ASSIGNED'].includes(ticket.status)) {
             throw new Error(`Tidak dapat mengubah ke PENDING dari status '${ticket.status}'`);
         }
-        const nowStr = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        const nowStr = getWIBDateTime();
         await pool.query(`
       UPDATE tickets SET status = 'PENDING', updated_at = ? WHERE id = ?
     `, [nowStr, ticketId]);
@@ -275,7 +304,7 @@ export class TicketService {
         if (!['ACTIVE', 'PENDING', 'ASSIGNED'].includes(ticket.status)) {
             throw new Error(`Tidak dapat mengubah ke RESOLVED dari status '${ticket.status}'`);
         }
-        const nowStr = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        const nowStr = getWIBDateTime();
         await pool.query(`
       UPDATE tickets SET status = 'RESOLVED', resolved_at = ?, updated_at = ? WHERE id = ?
     `, [nowStr, nowStr, ticketId]);
@@ -295,7 +324,7 @@ export class TicketService {
         if (ticket.status === 'CLOSED') {
             return ticket; // Sudah tertutup
         }
-        const nowStr = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        const nowStr = getWIBDateTime();
         await pool.query(`
       UPDATE tickets 
       SET status = 'CLOSED', 
@@ -328,7 +357,7 @@ export class TicketService {
         const ticket = await this.getTicketById(ticketId);
         if (!ticket)
             throw new Error('Tiket tidak ditemukan');
-        const nowStr = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        const nowStr = getWIBDateTime();
         await pool.query(`
       UPDATE tickets 
       SET status = 'WAITING', assigned_to = NULL, assigned_at = NULL, updated_at = ?
@@ -354,7 +383,7 @@ export class TicketService {
         if (adminRows.length === 0)
             throw new Error('Admin tujuan tidak ditemukan atau tidak aktif');
         const toAdmin = adminRows[0];
-        const nowStr = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        const nowStr = getWIBDateTime();
         // Tutup assignment sebelumnya
         await pool.query(`
       UPDATE ticket_assignments 
@@ -541,9 +570,10 @@ export class TicketService {
         if (!pool)
             return;
         const id = this.uuid();
+        const nowStr = getWIBDateTime();
         await pool.query(`
       INSERT INTO ticket_events (id, ticket_id, actor_type, actor_id, action, old_value, new_value, metadata, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
             id,
             ticketId,
@@ -552,14 +582,16 @@ export class TicketService {
             action,
             oldVal ? JSON.stringify(oldVal) : null,
             newVal ? JSON.stringify(newVal) : null,
-            metadata ? JSON.stringify(metadata) : null
+            metadata ? JSON.stringify(metadata) : null,
+            nowStr
         ]);
     }
     async recordEventWithConn(connection, ticketId, actorType, actorId, action, oldVal, newVal, metadata) {
         const id = this.uuid();
+        const nowStr = getWIBDateTime();
         await connection.query(`
       INSERT INTO ticket_events (id, ticket_id, actor_type, actor_id, action, old_value, new_value, metadata, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
             id,
             ticketId,
@@ -568,7 +600,8 @@ export class TicketService {
             action,
             oldVal ? JSON.stringify(oldVal) : null,
             newVal ? JSON.stringify(newVal) : null,
-            metadata ? JSON.stringify(metadata) : null
+            metadata ? JSON.stringify(metadata) : null,
+            nowStr
         ]);
     }
 }

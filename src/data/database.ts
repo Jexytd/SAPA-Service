@@ -1,4 +1,4 @@
-﻿import mysql from 'mysql2/promise';
+import mysql from 'mysql2/promise';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -21,6 +21,7 @@ export function getDBPool(): mysql.Pool | null {
       user,
       password,
       database,
+      timezone: '+07:00',
       waitForConnections: true,
       connectionLimit: 5,
       queueLimit: 0,

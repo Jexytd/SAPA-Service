@@ -17,6 +17,7 @@ export function getDBPool() {
             user,
             password,
             database,
+            timezone: '+07:00',
             waitForConnections: true,
             connectionLimit: 5,
             queueLimit: 0,
