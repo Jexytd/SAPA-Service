@@ -46,7 +46,7 @@ Senin – Jumat (08.00 – 15.30 WIB)
 • *Website Resmi:* http://bangkakab.bps.go.id
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-💡 _Silakan hubungi kontak di atas pada jam kerja untuk dilayani oleh petugas kami._`;
+💡 _Ketik *hubungi petugas PST BPS* di WhatsApp ini untuk langsung membuka tiket bantuan Customer Service resmi BPS Kab. Bangka._`;
 
 export const DEFAULT_FAQ_DATA: Record<string, string> = {
   "Jumlah Penduduk": "Jumlah Penduduk Kabupaten Bangka tahun 2025 tercatat sebanyak *346.069 jiwa*.<br><br>📊 *Sumber:* Proyeksi Penduduk 2020-2035 Hasil SP2020 BPS.",

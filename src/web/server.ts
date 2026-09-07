@@ -604,10 +604,9 @@ export function createWebServer(): express.Express {
     res.json({ success: true, data: updated });
   });
 
-  // DELETE /api/records/:id
-  app.delete('/api/records/:id', (req: Request, res: Response) => {
+  const executeDeleteRecord = (targetId: string, req: Request, res: Response) => {
     const store = loadBackendStore();
-    const record = store.records.find(r => r.id === req.params.id);
+    const record = store.records.find(r => r.id === targetId);
     if (!record) {
       res.status(404).json({ success: false, error: 'Record tidak ditemukan.' });
       return;
@@ -615,9 +614,46 @@ export function createWebServer(): express.Express {
 
     record.is_deleted = true;
     record.updated_at = new Date().toISOString();
-    saveBackendStore(store);
 
-    res.json({ success: true, message: 'Record berhasil dihapus.' });
+    // Hitung ulang jumlah record aktif pada dataset induk
+    const parentDs = store.datasets.find(d => d.id === record.dataset_id);
+    if (parentDs) {
+      parentDs.record_count = store.records.filter(r => r.dataset_id === parentDs.id && !r.is_deleted).length;
+    }
+
+    saveBackendStore(store);
+    syncAllPublishedToFAQ();
+
+    res.json({ success: true, message: 'Record berhasil dihapus.', id: targetId });
+  };
+
+  // DELETE /api/records/:id
+  app.delete('/api/records/:id', (req: Request, res: Response) => {
+    executeDeleteRecord(String(req.params.id), req, res);
+  });
+
+  // DELETE /api/records (Support parameter via body { id } atau query ?id=...)
+  app.delete('/api/records', (req: Request, res: Response) => {
+    const id = (req.body && (req.body.id || req.body.record_id)) || req.query.id || req.query.record_id;
+    if (!id) {
+      res.status(400).json({ success: false, error: 'ID record wajib disertakan.' });
+      return;
+    }
+    executeDeleteRecord(String(id), req, res);
+  });
+
+  // POST /api/records/:id/delete & POST /api/records/delete (Kompatibilitas alternatif)
+  app.post('/api/records/:id/delete', (req: Request, res: Response) => {
+    executeDeleteRecord(String(req.params.id), req, res);
+  });
+
+  app.post('/api/records/delete', (req: Request, res: Response) => {
+    const id = (req.body && (req.body.id || req.body.record_id)) || req.query.id || req.query.record_id;
+    if (!id) {
+      res.status(400).json({ success: false, error: 'ID record wajib disertakan.' });
+      return;
+    }
+    executeDeleteRecord(String(id), req, res);
   });
 
   // POST /api/records/bulk

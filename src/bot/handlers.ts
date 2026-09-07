@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { INFLASI_REDIRECT_CARD } from '../data/csvLoader.js';
 import { processUserMessage } from '../nlp/matcher.js';
 import { isChatSuspended, resumeBot, botProcessStartTime } from './whatsapp.js';
+import { getDynamicMenuItems } from '../nlp/menu.js';
 import { ticketService } from '../services/ticketService.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -185,29 +186,67 @@ export async function handleIncomingMessages(sock: WASocket, messages: any[]) {
       continue;
     }
 
-    // KASUS B: Pengguna meminta bantuan Customer Service / Hubungi Admin
-    const CS_REQUEST_TRIGGERS = [
-      'hubungi admin', 'hubungi cs', 'customer service', 'bantuan cs', 
-      'admin cs', 'petugas pst', 'hubungi petugas', 'bicara dengan admin', 
-      'chat admin', 'operator', 'cs', '#cs', '/cs', '🔴 hubungi admin',
-      'mau bicara dengan orang', 'bantuan manusia'
+    // KASUS B: Pengguna meminta bantuan Customer Service / Hubungi Petugas PST BPS / Hubungi Admin
+    // 1. Frasa spesifik yang memicu tiket CS
+    const CS_PHRASES = [
+      'hubungi petugas pst bps', 'hubungi petugas pst', 'hubungi petugas bps', 'hubungi petugas',
+      'petugas pst bps', 'petugas pst', 'hubungi admin', 'hubungi cs', 'customer service',
+      'bantuan cs', 'admin cs', 'bicara dengan admin', 'bicara dengan petugas', 'chat admin',
+      'chat petugas', 'bantuan manusia', 'mau bicara dengan orang', 'konsultasi pst',
+      'konsultasi petugas', 'layanan pst', 'kontak petugas', 'tiket cs', 'buat tiket',
+      '🔴 hubungi admin'
     ];
-    if (CS_REQUEST_TRIGGERS.some(t => cleanMsg === t || (cleanMsg.length <= 20 && cleanMsg.includes(t)))) {
-      const { ticket, isNew } = await ticketService.createTicket(
-        remoteNumber, 
-        (msg as any).pushName || undefined, 
-        text, 
-        msg.key?.id
-      );
 
-      if (isNew) {
+    // 2. Keyword tunggal / command pendek
+    const CS_EXACT_KEYWORDS = [
+      'cs', '#cs', '/cs', 'operator', 'petugas', 'admin', 'pst'
+    ];
+
+    // 3. Pengecekan nomor menu dinamis untuk opsi 'Hubungi Petugas PST BPS'
+    let isPSTMenuNumber = false;
+    if (/^\d+$/.test(cleanMsg)) {
+      const selectedNum = parseInt(cleanMsg, 10);
+      const menuItems = getDynamicMenuItems();
+      const matchedMenuItem = menuItems.find(m => m.number === selectedNum);
+      if (matchedMenuItem && (
+        matchedMenuItem.label.toLowerCase().includes('petugas') ||
+        matchedMenuItem.label.toLowerCase().includes('pst')
+      )) {
+        isPSTMenuNumber = true;
+      }
+    }
+
+    const isCSRequest = isPSTMenuNumber ||
+      CS_PHRASES.some(phrase => cleanMsg === phrase || cleanMsg.includes(phrase)) ||
+      CS_EXACT_KEYWORDS.some(kw => {
+        if (cleanMsg === kw) return true;
+        const regex = new RegExp(`(^|[\\s.,!?])${kw}([\\s.,!?]|$)`, 'i');
+        return regex.test(cleanMsg) && cleanMsg.length <= 30;
+      });
+
+    if (isCSRequest) {
+      try {
+        const { ticket, isNew } = await ticketService.createTicket(
+          remoteNumber, 
+          (msg as any).pushName || undefined, 
+          text, 
+          msg.key?.id
+        );
+
+        if (isNew) {
+          await safeSendMessage(jid, {
+            text: `🎫 *Tiket Bantuan Customer Service Dibuat*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nNomor Tiket: *#${ticket.ticket_number}*\nStatus: *Menunggu Petugas (WAITING)*\n\nPermintaan Anda telah kami terima. Petugas Customer Service BPS Kab. Bangka akan segera bergabung dalam obrolan ini.\n\n_Ketik #selesai kapan saja jika Anda ingin membatalkan dan kembali ke asisten bot otomatis._`
+          }, sendOpts);
+          console.log(`[CS TICKET CREATED] Tiket #${ticket.ticket_number} dibuat untuk ${remoteNumber}.`);
+        } else {
+          await safeSendMessage(jid, {
+            text: `ℹ️ *Tiket Customer Service Sedang Berjalan*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nAnda telah memiliki tiket aktif *#${ticket.ticket_number}* dengan status *${ticket.status}*.\n\nSilakan sampaikan pertanyaan atau kendala Anda di sini, petugas kami akan segera membalasnya.\n\n_Ketik #selesai untuk mengakhiri sesi CS._`
+          }, sendOpts);
+        }
+      } catch (err: any) {
+        console.error('[ERROR BUAT TIKET CS]', err?.message || err);
         await safeSendMessage(jid, {
-          text: `🎫 *Tiket Bantuan Customer Service Dibuat*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nNomor Tiket: *#${ticket.ticket_number}*\nStatus: *Menunggu Petugas (WAITING)*\n\nPermintaan Anda telah kami terima. Petugas Customer Service BPS Kab. Bangka akan segera bergabung dalam obrolan ini.\n\n_Ketik #selesai kapan saja jika Anda ingin membatalkan dan kembali ke asisten bot otomatis._`
-        }, sendOpts);
-        console.log(`[CS TICKET CREATED] Tiket #${ticket.ticket_number} dibuat untuk ${remoteNumber}.`);
-      } else {
-        await safeSendMessage(jid, {
-          text: `ℹ️ *Tiket Customer Service Sedang Berjalan*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nAnda telah memiliki tiket aktif *#${ticket.ticket_number}* dengan status *${ticket.status}*.\n\nSilakan sampaikan pertanyaan atau kendala Anda di sini, petugas kami akan segera membalasnya.\n\n_Ketik #selesai untuk mengakhiri sesi CS._`
+          text: `⚠️ *Layanan Tiket Bantuan CS Sedang Mengalami Kendala Teknis*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nMohon maaf, sistem tiket saat ini mengalami gangguan koneksi database. Silakan coba kembali beberapa saat lagi, atau hubungi kontak kantor BPS Kab. Bangka di (0717) 92492.`
         }, sendOpts);
       }
       continue;

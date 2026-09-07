@@ -5,6 +5,7 @@ import { loadFAQData, PST_CONTACT_CARD, INFLASI_REDIRECT_CARD } from '../data/cs
 import { getFriendlyGreeting, generateDynamicMenu, formatPrettyResponse, getFAQByIndex, getDynamicMenuItems } from './menu.js';
 import { queryQwenAI } from './llmFallback.js';
 import { loadBackendStore, DataStatus } from '../data/dbStore.js';
+import { ticketService } from '../services/ticketService.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const KB_JSON_PATH = path.resolve(__dirname, '../data/kb_bps_bangka_2025.json');
@@ -368,6 +369,33 @@ export function findExactFAQMatch(userMessage, faqData) {
     return null;
 }
 const pendingSubmenuSessions = new Map();
+async function handleCSTicketRequest(sessionId, initialMsg) {
+    const cleanPhone = sessionId.replace(/[^0-9]/g, '');
+    if (cleanPhone.length >= 8) {
+        try {
+            const { ticket, isNew } = await ticketService.createTicket(cleanPhone, undefined, initialMsg);
+            if (isNew) {
+                return (`🎫 *Tiket Bantuan Customer Service Dibuat*\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `Nomor Tiket: *#${ticket.ticket_number}*\n` +
+                    `Status: *Menunggu Petugas (WAITING)*\n\n` +
+                    `Permintaan Anda telah kami terima. Petugas Customer Service BPS Kab. Bangka akan segera bergabung dalam obrolan ini.\n\n` +
+                    `_Ketik #selesai kapan saja jika Anda ingin membatalkan dan kembali ke asisten bot otomatis._`);
+            }
+            else {
+                return (`ℹ️ *Tiket Customer Service Sedang Berjalan*\n` +
+                    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                    `Anda telah memiliki tiket aktif *#${ticket.ticket_number}* dengan status *${ticket.status}*.\n\n` +
+                    `Silakan sampaikan pertanyaan atau kendala Anda di sini, petugas kami akan segera membalasnya.\n\n` +
+                    `_Ketik #selesai untuk mengakhiri sesi CS._`);
+            }
+        }
+        catch (err) {
+            console.warn('[WARN] Gagal memproses tiket CS di matcher:', err?.message);
+        }
+    }
+    return PST_CONTACT_CARD;
+}
 export async function processUserMessage(rawMessage, imageBase64, sessionId = 'default') {
     const message = rawMessage.trim();
     // 1. Gambar / Foto dari WhatsApp -> Ditangani langsung oleh Qwen2-VL Multimodal
@@ -419,9 +447,29 @@ export async function processUserMessage(rawMessage, imageBase64, sessionId = 'd
         console.log(`[INFO BLOCKED] Pertanyaan Inflasi terdeteksi: "${message}". Mengalihkan resmi ke BPS Kota Pangkalpinang.`);
         return INFLASI_REDIRECT_CARD;
     }
-    // 3. Trigger Kontak Petugas PST Langsung
-    const PST_TRIGGERS = ["petugas", "admin", "konsultasi", "pst", "skripsi", "penelitian", "kontak", "kantor", "cs", "telepon", "hubungi", "10"];
-    if (PST_TRIGGERS.some(pt => msgClean === pt || msgClean.split(' ').includes(pt))) {
+    // 3. Trigger Hubungi Petugas PST BPS / Tiket Customer Service
+    const CS_PHRASES = [
+        'hubungi petugas pst bps', 'hubungi petugas pst', 'hubungi petugas bps', 'hubungi petugas',
+        'petugas pst bps', 'petugas pst', 'hubungi admin', 'hubungi cs', 'customer service',
+        'bantuan cs', 'admin cs', 'bicara dengan admin', 'bicara dengan petugas', 'chat admin',
+        'chat petugas', 'bantuan manusia', 'mau bicara dengan orang', 'konsultasi pst',
+        'konsultasi petugas', 'layanan pst', 'kontak petugas', 'tiket cs', 'buat tiket',
+        '🔴 hubungi admin'
+    ];
+    const CS_EXACT_KEYWORDS = ['cs', '#cs', '/cs', 'operator', 'petugas'];
+    const isCSReq = CS_PHRASES.some(phrase => msgClean === phrase || msgClean.includes(phrase)) ||
+        CS_EXACT_KEYWORDS.some(kw => {
+            if (msgClean === kw)
+                return true;
+            const regex = new RegExp(`(^|[\\s.,!?])${kw}([\\s.,!?]|$)`, 'i');
+            return regex.test(msgClean) && msgClean.length <= 30;
+        });
+    if (isCSReq) {
+        return await handleCSTicketRequest(sessionId, message);
+    }
+    // Kontak PST Umum (Kantor, telepon, dsb.)
+    const PST_GENERAL_TRIGGERS = ["konsultasi", "skripsi", "penelitian", "kontak", "kantor", "telepon", "alamat"];
+    if (PST_GENERAL_TRIGGERS.some(pt => msgClean === pt || msgClean.split(' ').includes(pt))) {
         return PST_CONTACT_CARD;
     }
     // 4. Sapaan Ramah Singkat (Greetings) & Menu SAPA BPS
@@ -455,7 +503,7 @@ export async function processUserMessage(rawMessage, imageBase64, sessionId = 'd
         if (matchedItem) {
             if (matchedItem.type === 'service') {
                 if (matchedItem.label.includes('Petugas') || matchedItem.label.includes('PST')) {
-                    return PST_CONTACT_CARD;
+                    return await handleCSTicketRequest(sessionId, message);
                 }
                 if (faqData && faqData[matchedItem.label]) {
                     return formatPrettyResponse(matchedItem.label, faqData[matchedItem.label]);

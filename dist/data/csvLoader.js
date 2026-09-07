@@ -35,7 +35,7 @@ Senin – Jumat (08.00 – 15.30 WIB)
 • *Website Resmi:* http://bangkakab.bps.go.id
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-💡 _Silakan hubungi kontak di atas pada jam kerja untuk dilayani oleh petugas kami._`;
+💡 _Ketik *hubungi petugas PST BPS* di WhatsApp ini untuk langsung membuka tiket bantuan Customer Service resmi BPS Kab. Bangka._`;
 export const DEFAULT_FAQ_DATA = {
     "Jumlah Penduduk": "Jumlah Penduduk Kabupaten Bangka tahun 2025 tercatat sebanyak *346.069 jiwa*.<br><br>📊 *Sumber:* Proyeksi Penduduk 2020-2035 Hasil SP2020 BPS.",
     "Data Kemiskinan": "📊 *DATA KEMISKINAN KABUPATEN BANGKA*<br><br>📍 *Kabupaten Bangka (2025):*<br>• Jumlah Penduduk Miskin: *16,58 ribu jiwa*<br>• Persentase Kemiskinan: *4,71%*<br>• Garis Kemiskinan: *Rp734.575 / kapita / bulan*<br>• Indeks Kedalaman (P1): *0,51* | Keparahan (P2): *0,09*<br><br>📍 *Perbandingan Kab/Kota Se-Babel (2025):*<br>1. Bangka Barat: *2,92%*<br>2. Bangka Selatan: *4,17%*<br>3. Pangkal Pinang: *4,50%*<br>4. Bangka: *4,71%*<br>5. Belitung: *6,44%*<br>6. Belitung Timur: *6,69%*<br>7. Bangka Tengah: *6,70%*<br><br>💡 _Tersedia juga data historis 2022-2024. Ketik tahun misal: *kemiskinan 2023*._",
