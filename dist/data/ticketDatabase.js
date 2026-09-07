@@ -118,7 +118,13 @@ export async function initTicketDatabase() {
             const defaultSettings = [
                 ['auto_close_inactive_minutes', '30', 'Batas durasi tidak aktif sebelum tiket RESOLVED/PENDING ditutup otomatis oleh sistem (menit)'],
                 ['resolved_grace_period_minutes', '60', 'Masa tenggang saat tiket RESOLVED dapat diaktifkan kembali jika user membalas (menit)'],
-                ['max_assigned_tickets_per_admin', '10', 'Batas maksimal tiket aktif yang dapat ditangani oleh satu admin']
+                ['max_assigned_tickets_per_admin', '10', 'Batas maksimal tiket aktif yang dapat ditangani oleh satu admin'],
+                ['template_waiting', '🎫 *Tiket Bantuan Customer Service Dibuat*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nNomor Tiket: *#{ticket_number}*\nStatus: *Menunggu Petugas (WAITING)*\n\nPermintaan Anda telah kami terima. Petugas Customer Service BPS Kab. Bangka akan segera bergabung dalam obrolan ini.\n\n_Ketik #selesai kapan saja jika Anda ingin membatalkan dan kembali ke asisten bot otomatis._', 'Template pesan saat tiket baru dibuat menunggu admin'],
+                ['template_assigned', '💬 *Customer Service Terhubung*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCustomer Service *{admin_name}* telah mengambil tiket Anda (*#{ticket_number}*) dan siap melayani.\n\nSilakan sampaikan pertanyaan atau kendala Anda secara rinci.', 'Template pesan saat tiket diambil admin (terhubung)'],
+                ['template_pending', '⏳ *Status Tiket Ditunda (PENDING)*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTiket *#{ticket_number}* saat ini berstatus PENDING.\n{reason}\n\nPetugas kami sedang menindaklanjuti permintaan Anda. Mohon ditunggu.', 'Template pesan saat status tiket diubah ke PENDING'],
+                ['template_resolved', '✅ *Konsultasi Selesai (Tiket #{ticket_number})*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCustomer Service telah menandai percakapan ini selesai.\n\nTerima kasih telah berkonsultasi dengan Layanan PST BPS Kab. Bangka. Layanan asisten bot otomatis kini telah aktif kembali. Silakan ketik *menu* jika membutuhkan informasi lainnya.', 'Template pesan saat tiket diselesaikan (selesai)'],
+                ['template_closed', '🔒 *Percakapan Ditutup*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPercakapan untuk Tiket *#{ticket_number}* telah ditutup.\n\nTerima kasih telah menghubungi Layanan BPS Kab. Bangka. Asisten bot otomatis kini telah aktif kembali. Silakan ketik *menu* jika ingin memulai interaksi baru.', 'Template pesan saat tiket ditutup permanen'],
+                ['template_admin_message', '{message}', 'Format template pesan chat admin ke customer (gunakan {message} dan opsional {admin_name})']
             ];
             for (const [k, v, d] of defaultSettings) {
                 await connection.query(`INSERT IGNORE INTO settings (setting_key, setting_value, description) VALUES (?, ?, ?)`, [k, v, d]);

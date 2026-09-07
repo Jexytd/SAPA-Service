@@ -97,7 +97,9 @@ export class TicketService {
       FROM tickets t
       JOIN users u ON t.user_id = u.id
       LEFT JOIN admins a ON t.assigned_to = a.id
-      WHERE u.phone_number IN (${placeholders}) AND t.status IN ('WAITING', 'ASSIGNED', 'ACTIVE', 'PENDING', 'RESOLVED')
+      WHERE u.phone_number IN (${placeholders}) 
+        AND t.status IN ('WAITING', 'ASSIGNED', 'ACTIVE', 'PENDING') 
+        AND t.mode = 'HUMAN'
       ORDER BY t.created_at DESC LIMIT 1
     `, candidates);
         return rows.length > 0 ? rows[0] : null;
@@ -255,8 +257,8 @@ export class TicketService {
       `, [newStatus, nowStr, nowStr, ticketId]);
         }
         else if (senderType === 'USER') {
-            // Jika user membalas saat PENDING atau RESOLVED, beralih kembali ke ACTIVE
-            if (ticket.status === 'PENDING' || ticket.status === 'RESOLVED') {
+            // Jika user membalas saat status PENDING, beralih kembali ke ACTIVE
+            if (ticket.status === 'PENDING') {
                 newStatus = 'ACTIVE';
             }
             await pool.query(`
@@ -326,9 +328,16 @@ export class TicketService {
         }
         const nowStr = getWIBDateTime();
         await pool.query(`
-      UPDATE tickets SET status = 'RESOLVED', resolved_at = ?, updated_at = ? WHERE id = ?
+      UPDATE tickets 
+      SET status = 'RESOLVED', 
+          mode = 'BOT', 
+          resolved_at = ?, 
+          unread_admin_count = 0, 
+          unread_user_count = 0, 
+          updated_at = ? 
+      WHERE id = ?
     `, [nowStr, nowStr, ticketId]);
-        await this.recordEvent(ticketId, 'ADMIN', adminId, 'ticket_resolved', { status: ticket.status }, { status: 'RESOLVED', notes });
+        await this.recordEvent(ticketId, 'ADMIN', adminId, 'ticket_resolved', { status: ticket.status, mode: ticket.mode }, { status: 'RESOLVED', mode: 'BOT', notes });
         const updated = await this.getTicketById(ticketId);
         realtimeHub.broadcast('ticket.status_changed', { ticketId, oldStatus: ticket.status, newStatus: 'RESOLVED', ticket: updated });
         return updated;
@@ -582,7 +591,39 @@ export class TicketService {
         const pool = getDBPool();
         if (!pool)
             return;
-        await pool.query('UPDATE settings SET setting_value = ?, updated_at = CURRENT_TIMESTAMP WHERE setting_key = ?', [value, key]);
+        await pool.query(`
+      INSERT INTO settings (setting_key, setting_value, updated_at) 
+      VALUES (?, ?, CURRENT_TIMESTAMP) 
+      ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP
+    `, [key, value]);
+    }
+    // 19. TEMPLATE PESAN CUSTOMER SERVICE
+    async getTemplate(key, replacements = {}) {
+        const defaultTemplates = {
+            template_waiting: '🎫 *Tiket Bantuan Customer Service Dibuat*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nNomor Tiket: *#{ticket_number}*\nStatus: *Menunggu Petugas (WAITING)*\n\nPermintaan Anda telah kami terima. Petugas Customer Service BPS Kab. Bangka akan segera bergabung dalam obrolan ini.\n\n_Ketik #selesai kapan saja jika Anda ingin membatalkan dan kembali ke asisten bot otomatis._',
+            template_assigned: '💬 *Customer Service Terhubung*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCustomer Service *{admin_name}* telah mengambil tiket Anda (*#{ticket_number}*) dan siap melayani.\n\nSilakan sampaikan pertanyaan atau kendala Anda secara rinci.',
+            template_pending: '⏳ *Status Tiket Ditunda (PENDING)*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTiket *#{ticket_number}* saat ini berstatus PENDING.\n{reason}\n\nPetugas kami sedang menindaklanjuti permintaan Anda. Mohon ditunggu.',
+            template_resolved: '✅ *Konsultasi Selesai (Tiket #{ticket_number})*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCustomer Service telah menandai percakapan ini selesai.\n\nTerima kasih telah berkonsultasi dengan Layanan PST BPS Kab. Bangka. Layanan asisten bot otomatis kini telah aktif kembali. Silakan ketik *menu* jika membutuhkan informasi lainnya.',
+            template_closed: '🔒 *Percakapan Ditutup*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPercakapan untuk Tiket *#{ticket_number}* telah ditutup.\n\nTerima kasih telah menghubungi Layanan BPS Kab. Bangka. Asisten bot otomatis kini telah aktif kembali. Silakan ketik *menu* jika ingin memulai interaksi baru.',
+            template_admin_message: '{message}'
+        };
+        let template = defaultTemplates[key] || '';
+        try {
+            const pool = getDBPool();
+            if (pool) {
+                const [rows] = await pool.query('SELECT setting_value FROM settings WHERE setting_key = ?', [key]);
+                if (rows.length > 0 && rows[0].setting_value) {
+                    template = rows[0].setting_value;
+                }
+            }
+        }
+        catch (err) {
+            console.warn(`[WARN GET TEMPLATE] Gagal membaca setting ${key}:`, err?.message || err);
+        }
+        for (const [k, v] of Object.entries(replacements)) {
+            template = template.replace(new RegExp(`\\{${k}\\}`, 'g'), v ?? '');
+        }
+        return template;
     }
     // Helper pencatatan Audit Log
     async recordEvent(ticketId, actorType, actorId, action, oldVal, newVal, metadata) {

@@ -136,11 +136,16 @@ export function createTicketRouter(): Router {
       const ticket = result.ticket;
       if (ticket && ticket.user_phone) {
         const adminName = ticket.admin_name || 'Petugas CS';
-        const welcomeText = `💬 *Customer Service Terhubung*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCustomer Service *${adminName}* telah mengambil tiket Anda (*#${ticket.ticket_number}*) dan siap melayani.\n\nSilakan sampaikan pertanyaan atau kendala Anda secara rinci.`;
-        sendWhatsAppMessageSafe(ticket.user_phone, { text: welcomeText }).then(() => {
-          console.log(`[WA NOTIF] Notifikasi CS terhubung terkirim ke ${ticket.user_phone} (Tiket #${ticket.ticket_number})`);
-        }).catch((waErr: any) => {
-          console.error(`[ERROR WA NOTIF] Gagal mengirim pesan CS terhubung ke ${ticket.user_phone}:`, waErr?.message || waErr);
+        ticketService.getTemplate('template_assigned', {
+          ticket_number: ticket.ticket_number,
+          admin_name: adminName,
+          user_name: ticket.user_name || 'Pengguna'
+        }).then(welcomeText => {
+          sendWhatsAppMessageSafe(ticket.user_phone!, { text: welcomeText }).then(() => {
+            console.log(`[WA NOTIF] Notifikasi CS terhubung terkirim ke ${ticket.user_phone} (Tiket #${ticket.ticket_number})`);
+          }).catch((waErr: any) => {
+            console.error(`[ERROR WA NOTIF] Gagal mengirim pesan CS terhubung ke ${ticket.user_phone}:`, waErr?.message || waErr);
+          });
         });
       } else {
         const sock = getWhatsAppSocket();
@@ -180,9 +185,11 @@ export function createTicketRouter(): Router {
         return res.status(400).json({ success: false, error: 'Tiket sudah ditutup, tidak dapat mengirim pesan' });
       }
 
-      // 1. Kirim pesan secara langsung ke WhatsApp Pengguna lebih dulu
-      const adminName = ticket.admin_name || 'Customer Service';
-      const formattedMsg = `*${adminName} (CS BPS Bangka):*\n${message}\n\n_Ketik #selesai untuk mengakhiri sesi CS._`;
+      // 1. Format pesan menggunakan template (default: murni isi pesan tanpa prefix admin)
+      const formattedMsg = await ticketService.getTemplate('template_admin_message', {
+        message,
+        admin_name: ticket.admin_name || 'Customer Service'
+      });
 
       let externalMessageId: string | undefined = undefined;
       if (ticket.user_phone) {
@@ -226,6 +233,18 @@ export function createTicketRouter(): Router {
       }
 
       const updated = await ticketService.setPending(ticketId, adminId, reason);
+
+      // Kirim notifikasi ke WhatsApp User jika tiket di-pending
+      if (updated.user_phone) {
+        ticketService.getTemplate('template_pending', {
+          ticket_number: updated.ticket_number,
+          reason: reason ? `Alasan: ${reason}` : '',
+          admin_name: updated.admin_name || 'Petugas CS'
+        }).then(pendingText => {
+          sendWhatsAppMessageSafe(updated.user_phone!, { text: pendingText }).catch(() => {});
+        });
+      }
+
       res.json({ success: true, message: 'Status tiket diubah menjadi PENDING', data: updated });
     } catch (err: any) {
       res.status(400).json({ success: false, error: err.message });
@@ -243,9 +262,13 @@ export function createTicketRouter(): Router {
 
       const updated = await ticketService.resolveTicket(ticketId, adminId, notes);
 
-      // Kirim info ke user bahwa masalah dianggap selesai
+      // Kirim info ke user bahwa masalah dianggap selesai menggunakan template_resolved
       if (updated.user_phone) {
-        const resolveText = `✅ *Konsultasi Selesai (Tiket #${updated.ticket_number})*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCustomer Service telah menandai percakapan ini selesai.\n\nJika masih ada yang ingin ditanyakan, Anda dapat membalas pesan ini langsung. Jika sudah tidak ada pertanyaan, ketik *#selesai* untuk mengakhiri sesi.`;
+        const resolveText = await ticketService.getTemplate('template_resolved', {
+          ticket_number: updated.ticket_number,
+          notes: notes || '',
+          admin_name: updated.admin_name || 'Petugas CS'
+        });
         sendWhatsAppMessageSafe(updated.user_phone, { text: resolveText }).catch((err: any) => {
           console.error(`[ERROR WA NOTIF RESOLVE] Gagal kirim info resolve ke ${updated.user_phone}:`, err?.message || err);
         });
@@ -270,9 +293,13 @@ export function createTicketRouter(): Router {
         closeReason || 'Ditutup oleh admin pelayanan'
       );
 
-      // Kirim konfirmasi penutupan ke WhatsApp user
+      // Kirim konfirmasi penutupan ke WhatsApp user menggunakan template_closed
       if (updated.user_phone) {
-        const closeText = `🔒 *Percakapan Ditutup*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPercakapan untuk Tiket *#${updated.ticket_number}* telah ditutup.\n\nTerima kasih telah menghubungi Layanan BPS Kab. Bangka. Asisten bot otomatis kini telah aktif kembali. Silakan ketik *menu* jika ingin memulai interaksi baru.`;
+        const closeText = await ticketService.getTemplate('template_closed', {
+          ticket_number: updated.ticket_number,
+          reason: closeReason || '',
+          closed_by: closedByType || 'ADMIN'
+        });
         sendWhatsAppMessageSafe(updated.user_phone, { text: closeText }).catch((err: any) => {
           console.error(`[ERROR WA NOTIF CLOSE] Gagal kirim info close ke ${updated.user_phone}:`, err?.message || err);
         });

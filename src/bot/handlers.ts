@@ -167,9 +167,12 @@ export async function handleIncomingMessages(sock: WASocket, messages: any[]) {
           activeTicket.user_id, 
           'Diakhiri oleh pengguna melalui WhatsApp'
         );
-        await safeSendMessage(jid, {
-          text: `🔒 *Percakapan Customer Service Diakhiri*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nSesi percakapan Anda untuk Tiket *#${activeTicket.ticket_number}* telah ditutup.\n\nTerima kasih telah menghubungi Layanan BPS Kab. Bangka. Asisten bot otomatis kini telah aktif kembali.\n\nSilakan ketik *menu* untuk melihat informasi data statistik resmi.`
-        }, sendOpts);
+        const closedMsg = await ticketService.getTemplate('template_closed', {
+          ticket_number: activeTicket.ticket_number,
+          reason: 'Diakhiri oleh pengguna melalui WhatsApp',
+          closed_by: 'USER'
+        });
+        await safeSendMessage(jid, { text: closedMsg }, sendOpts);
         console.log(`[CS TICKET CLOSED BY USER] Tiket #${activeTicket.ticket_number} ditutup oleh ${remoteNumber}.`);
         continue;
       }
@@ -237,9 +240,11 @@ export async function handleIncomingMessages(sock: WASocket, messages: any[]) {
         );
 
         if (isNew) {
-          await safeSendMessage(jid, {
-            text: `🎫 *Tiket Bantuan Customer Service Dibuat*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nNomor Tiket: *#${ticket.ticket_number}*\nStatus: *Menunggu Petugas (WAITING)*\n\nPermintaan Anda telah kami terima. Petugas Customer Service BPS Kab. Bangka akan segera bergabung dalam obrolan ini.\n\n_Ketik #selesai kapan saja jika Anda ingin membatalkan dan kembali ke asisten bot otomatis._`
-          }, sendOpts);
+          const waitingMsg = await ticketService.getTemplate('template_waiting', {
+            ticket_number: ticket.ticket_number,
+            user_name: ticket.user_name || (msg as any).pushName || 'Pengguna'
+          });
+          await safeSendMessage(jid, { text: waitingMsg }, sendOpts);
           console.log(`[CS TICKET CREATED] Tiket #${ticket.ticket_number} dibuat untuk ${remoteNumber}.`);
         } else {
           await safeSendMessage(jid, {
