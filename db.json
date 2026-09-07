@@ -2605,24 +2605,6 @@
       "created_at": "2026-09-06T17:43:59.720Z"
     },
     {
-      "id": "1788545801094-t2zq74f",
-      "entity_type": "record",
-      "entity_id": "rec-growth-q-2025-Q1",
-      "entity_name": "Pertumbuhan Ekonomi Triwulanan (2025-Q1)",
-      "action": "VERIFY_ANOMALY",
-      "changes": [
-        {
-          "field": "notes",
-          "old_value": "",
-          "new_value": "DEMO / SAMPLE DATA [Dikonfirmasi Valid] - Data riil terverifikasi sesuai hasil pendataan lapangan resmi BPS"
-        }
-      ],
-      "user_id": "user-1",
-      "user_name": "Ahmad Fauzi",
-      "reason": "Data riil terverifikasi sesuai hasil pendataan lapangan resmi BPS",
-      "created_at": "2026-09-04T18:16:41.182Z"
-    },
-    {
       "id": "1788545739465-w7e2niw",
       "entity_type": "record",
       "entity_id": "rec-growth-q1",

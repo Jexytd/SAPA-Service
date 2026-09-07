@@ -615,6 +615,13 @@ export function createWebServer(): express.Express {
     record.is_deleted = true;
     record.updated_at = new Date().toISOString();
 
+    if (!Array.isArray((store as any).deleted_record_ids)) {
+      (store as any).deleted_record_ids = [];
+    }
+    if (!(store as any).deleted_record_ids.includes(targetId)) {
+      (store as any).deleted_record_ids.push(targetId);
+    }
+
     // Hitung ulang jumlah record aktif pada dataset induk
     const parentDs = store.datasets.find(d => d.id === record.dataset_id);
     if (parentDs) {
@@ -1171,11 +1178,24 @@ export function createWebServer(): express.Express {
       });
     }
 
+    // Inisialisasi daftar id record terhapus jika belum ada
+    if (!Array.isArray((store as any).deleted_record_ids)) {
+      (store as any).deleted_record_ids = [];
+    }
+    const globalDeletedRecSet = new Set((store as any).deleted_record_ids);
+
     // 2. Tangani Penghapusan Record yang diminta frontend
     if (Array.isArray(deleted_record_ids) && deleted_record_ids.length > 0) {
-      const delRecSet = new Set(deleted_record_ids);
+      for (const delId of deleted_record_ids) {
+        if (!delId) continue;
+        globalDeletedRecSet.add(delId);
+        if (!(store as any).deleted_record_ids.includes(delId)) {
+          (store as any).deleted_record_ids.push(delId);
+          modified = true;
+        }
+      }
       store.records.forEach(r => {
-        if (delRecSet.has(r.id) && !r.is_deleted) {
+        if (globalDeletedRecSet.has(r.id) && !r.is_deleted) {
           r.is_deleted = true;
           modified = true;
         }
@@ -1237,11 +1257,38 @@ export function createWebServer(): express.Express {
     if (Array.isArray(records)) {
       for (const rec of records) {
         if (!rec.id) continue;
+        // JANGAN hidupkan kembali record yang bertanda demo, sudah dihapus, atau dataset-nya terhapus/tidak ada
+        if (
+          globalDeletedRecSet.has(rec.id) ||
+          rec.is_deleted ||
+          globalDeletedDsSet.has(rec.dataset_id) ||
+          (rec.notes && (rec.notes.includes('DEMO') || rec.notes.includes('SAMPLE'))) ||
+          (rec.indicator && (rec.indicator.includes('Test') || rec.indicator.includes('Uji Coba'))) ||
+          rec.id.startsWith('rec-pop-') ||
+          rec.id.startsWith('rec-pov-') ||
+          rec.id.startsWith('rec-growth-') ||
+          rec.id.startsWith('rec-hdi-') ||
+          rec.id.startsWith('rec-labor-') ||
+          rec.id.startsWith('rec-grdp-') ||
+          rec.id.startsWith('rec-gdi-') ||
+          rec.id.startsWith('rec-edu-')
+        ) {
+          continue;
+        }
+
+        const parentDs = store.datasets.find(d => d.id === rec.dataset_id);
+        if (!parentDs || parentDs.is_deleted) {
+          continue;
+        }
+
         const existingIdx = store.records.findIndex(sr => sr.id === rec.id);
         if (existingIdx === -1) {
-          store.records.push(rec);
+          store.records.push({ ...rec, is_deleted: false });
           modified = true;
         } else {
+          if (store.records[existingIdx].is_deleted) {
+            continue;
+          }
           if (rec.updated_at && (!store.records[existingIdx].updated_at || new Date(rec.updated_at) > new Date(store.records[existingIdx].updated_at))) {
             store.records[existingIdx] = { ...store.records[existingIdx], ...rec };
             modified = true;
