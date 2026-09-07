@@ -1,6 +1,6 @@
 import { getDBPool } from '../data/database.js';
 import { ticketService } from './ticketService.js';
-import { getWhatsAppSocket } from '../bot/whatsapp.js';
+import { sendWhatsAppMessageSafe } from '../bot/whatsapp.js';
 
 class AutoCloseWorker {
   private timer: NodeJS.Timeout | null = null;
@@ -59,12 +59,10 @@ class AutoCloseWorker {
           await ticketService.closeTicket(t.id, 'SYSTEM', 'system_worker', 'INACTIVITY');
 
           // Kirim pemberitahuan ke WhatsApp pengguna
-          const sock = getWhatsAppSocket();
-          if (sock && t.user_phone) {
-            const jid = `${t.user_phone}@s.whatsapp.net`;
-            await sock.sendMessage(jid, {
+          if (t.user_phone) {
+            await sendWhatsAppMessageSafe(t.user_phone, {
               text: `🤖 *Sesi Percakapan Ditutup Otomatis*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTiket *#${t.ticket_number}* telah ditutup otomatis oleh sistem karena tidak ada aktivitas baru selama lebih dari ${autoCloseMinutes} menit.\n\nLayanan asisten otomatis SAPA BPS telah aktif kembali. Silakan ketik *menu* jika Anda membutuhkan informasi statistik lainnya.`
-            });
+            }).catch(() => {});
           }
         } catch (itemErr: any) {
           console.error(`[AUTO-CLOSE ERROR] Gagal menutup tiket ${t.id}:`, itemErr.message);

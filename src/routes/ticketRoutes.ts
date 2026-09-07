@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { ticketService } from '../services/ticketService.js';
 import { realtimeHub } from '../services/realtimeHub.js';
-import { getWhatsAppSocket } from '../bot/whatsapp.js';
+import { getWhatsAppSocket, sendWhatsAppMessageSafe, resolveWhatsAppTarget } from '../bot/whatsapp.js';
 
 export function createTicketRouter(): Router {
   const router = Router();
@@ -133,20 +133,17 @@ export function createTicketRouter(): Router {
       }
 
       // Notifikasi ke WhatsApp User bahwa CS telah mengambil tiket
-      const sock = getWhatsAppSocket();
       const ticket = result.ticket;
-      if (sock && ticket && ticket.user_phone) {
-        const cleanPhone = ticket.user_phone.replace(/[^0-9]/g, '');
-        const jid = `${cleanPhone}@s.whatsapp.net`;
+      if (ticket && ticket.user_phone) {
         const adminName = ticket.admin_name || 'Petugas CS';
-        sock.sendMessage(jid, {
-          text: `💬 *Customer Service Terhubung*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCustomer Service *${adminName}* telah mengambil tiket Anda (*#${ticket.ticket_number}*) dan siap melayani.\n\nSilakan sampaikan pertanyaan atau kendala Anda secara rinci.`
-        }).then(() => {
-          console.log(`[WA NOTIF] Notifikasi CS terhubung terkirim ke WhatsApp ${cleanPhone} (Tiket #${ticket.ticket_number})`);
+        const welcomeText = `💬 *Customer Service Terhubung*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCustomer Service *${adminName}* telah mengambil tiket Anda (*#${ticket.ticket_number}*) dan siap melayani.\n\nSilakan sampaikan pertanyaan atau kendala Anda secara rinci.`;
+        sendWhatsAppMessageSafe(ticket.user_phone, { text: welcomeText }).then(() => {
+          console.log(`[WA NOTIF] Notifikasi CS terhubung terkirim ke ${ticket.user_phone} (Tiket #${ticket.ticket_number})`);
         }).catch((waErr: any) => {
-          console.error(`[ERROR WA NOTIF] Gagal mengirim pesan CS terhubung ke ${cleanPhone}:`, waErr?.message || waErr);
+          console.error(`[ERROR WA NOTIF] Gagal mengirim pesan CS terhubung ke ${ticket.user_phone}:`, waErr?.message || waErr);
         });
       } else {
+        const sock = getWhatsAppSocket();
         if (!sock) {
           console.warn(`[WARN WA NOTIF] WhatsApp bot belum terhubung/login, pesan notifikasi tiket #${ticket?.ticket_number} belum dapat dikirim.`);
         } else if (!ticket?.user_phone) {
@@ -183,31 +180,31 @@ export function createTicketRouter(): Router {
         return res.status(400).json({ success: false, error: 'Tiket sudah ditutup, tidak dapat mengirim pesan' });
       }
 
-      // 1. Simpan pesan ke database
+      // 1. Kirim pesan secara langsung ke WhatsApp Pengguna lebih dulu
+      const adminName = ticket.admin_name || 'Customer Service';
+      const formattedMsg = `*${adminName} (CS BPS Bangka):*\n${message}\n\n_Ketik #selesai untuk mengakhiri sesi CS._`;
+
+      let externalMessageId: string | undefined = undefined;
+      if (ticket.user_phone) {
+        try {
+          const sent = await sendWhatsAppMessageSafe(ticket.user_phone, { text: formattedMsg });
+          if (sent?.key?.id) {
+            externalMessageId = sent.key.id;
+          }
+        } catch (waErr: any) {
+          console.error(`[ERROR WA SEND MESSAGE] Gagal kirim balasan admin ke ${ticket.user_phone}:`, waErr?.message || waErr);
+        }
+      }
+
+      // 2. Simpan pesan ke database beserta externalMessageId jika ada
       const msg = await ticketService.addMessage(
         ticketId,
         'ADMIN',
         adminId,
         message,
-        messageType || 'TEXT'
+        messageType || 'TEXT',
+        externalMessageId
       );
-
-      // 2. Kirim pesan secara langsung ke WhatsApp Pengguna
-      const sock = getWhatsAppSocket();
-      if (sock && ticket.user_phone) {
-        const cleanPhone = ticket.user_phone.replace(/[^0-9]/g, '');
-        const jid = `${cleanPhone}@s.whatsapp.net`;
-        const adminName = ticket.admin_name || 'Customer Service';
-        const formattedMsg = `*${adminName} (CS BPS Bangka):*\n${message}\n\n_Ketik #selesai untuk mengakhiri sesi CS._`;
-
-        const sent = await sock.sendMessage(jid, { text: formattedMsg }).catch((waErr: any) => {
-          console.error(`[ERROR WA SEND MESSAGE] Gagal kirim balasan admin ke ${cleanPhone}:`, waErr?.message || waErr);
-          return null;
-        });
-        if (sent?.key?.id) {
-          msg.external_message_id = sent.key.id;
-        }
-      }
 
       res.status(201).json({
         success: true,
@@ -247,12 +244,11 @@ export function createTicketRouter(): Router {
       const updated = await ticketService.resolveTicket(ticketId, adminId, notes);
 
       // Kirim info ke user bahwa masalah dianggap selesai
-      const sock = getWhatsAppSocket();
-      if (sock && updated.user_phone) {
-        const jid = `${updated.user_phone}@s.whatsapp.net`;
-        sock.sendMessage(jid, {
-          text: `✅ *Konsultasi Selesai (Tiket #${updated.ticket_number})*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCustomer Service telah menandai percakapan ini selesai.\n\nJika masih ada yang ingin ditanyakan, Anda dapat membalas pesan ini langsung. Jika sudah tidak ada pertanyaan, ketik *#selesai* untuk mengakhiri sesi.`
-        }).catch(() => {});
+      if (updated.user_phone) {
+        const resolveText = `✅ *Konsultasi Selesai (Tiket #${updated.ticket_number})*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nCustomer Service telah menandai percakapan ini selesai.\n\nJika masih ada yang ingin ditanyakan, Anda dapat membalas pesan ini langsung. Jika sudah tidak ada pertanyaan, ketik *#selesai* untuk mengakhiri sesi.`;
+        sendWhatsAppMessageSafe(updated.user_phone, { text: resolveText }).catch((err: any) => {
+          console.error(`[ERROR WA NOTIF RESOLVE] Gagal kirim info resolve ke ${updated.user_phone}:`, err?.message || err);
+        });
       }
 
       res.json({ success: true, message: 'Tiket berhasil diselesaikan', data: updated });
@@ -275,12 +271,11 @@ export function createTicketRouter(): Router {
       );
 
       // Kirim konfirmasi penutupan ke WhatsApp user
-      const sock = getWhatsAppSocket();
-      if (sock && updated.user_phone) {
-        const jid = `${updated.user_phone}@s.whatsapp.net`;
-        sock.sendMessage(jid, {
-          text: `🔒 *Percakapan Ditutup*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPercakapan untuk Tiket *#${updated.ticket_number}* telah ditutup.\n\nTerima kasih telah menghubungi Layanan BPS Kab. Bangka. Asisten bot otomatis kini telah aktif kembali. Silakan ketik *menu* jika ingin memulai interaksi baru.`
-        }).catch(() => {});
+      if (updated.user_phone) {
+        const closeText = `🔒 *Percakapan Ditutup*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nPercakapan untuk Tiket *#${updated.ticket_number}* telah ditutup.\n\nTerima kasih telah menghubungi Layanan BPS Kab. Bangka. Asisten bot otomatis kini telah aktif kembali. Silakan ketik *menu* jika ingin memulai interaksi baru.`;
+        sendWhatsAppMessageSafe(updated.user_phone, { text: closeText }).catch((err: any) => {
+          console.error(`[ERROR WA NOTIF CLOSE] Gagal kirim info close ke ${updated.user_phone}:`, err?.message || err);
+        });
       }
 
       res.json({ success: true, message: 'Tiket berhasil ditutup', data: updated });

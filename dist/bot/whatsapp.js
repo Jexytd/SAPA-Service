@@ -155,6 +155,7 @@ export function getBotStatus() {
 export function getWhatsAppSocket() {
     return currentSocket;
 }
+export { resolveWhatsAppTarget, sendWhatsAppMessageSafe } from './whatsappUtils.js';
 export async function requestPairing(phoneNumber) {
     if (!currentSocket)
         return null;

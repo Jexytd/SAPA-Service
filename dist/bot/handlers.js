@@ -7,6 +7,7 @@ import { processUserMessage } from '../nlp/matcher.js';
 import { botProcessStartTime } from './whatsapp.js';
 import { getDynamicMenuItems } from '../nlp/menu.js';
 import { ticketService } from '../services/ticketService.js';
+import { resolveWhatsAppTarget } from './whatsappUtils.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DB_JSON_PATH = path.resolve(__dirname, '../../db.json');
@@ -59,9 +60,11 @@ export async function handleIncomingMessages(sock, messages) {
             continue;
         }
         // 4. DETEKSI PENGUJIAN SENDIRI (Self-Chat / Message Yourself)
-        const remoteNumber = jid.split(':')[0].split('@')[0];
-        const isSelfChat = !!((myNumber && remoteNumber === myNumber) ||
-            (myLid && remoteNumber === myLid) ||
+        const rawRemoteNumber = jid.split(':')[0].split('@')[0];
+        const targetInfo = resolveWhatsAppTarget(jid);
+        const remoteNumber = targetInfo.phone || rawRemoteNumber;
+        const isSelfChat = !!((myNumber && (remoteNumber === myNumber || rawRemoteNumber === myNumber)) ||
+            (myLid && (remoteNumber === myLid || rawRemoteNumber === myLid)) ||
             jid.includes(myNumber));
         // ============================================================
         // MODE CHAT PRIBADI: TERBUKA UNTUK CHAT PRIBADI (UMUM & PENGUJIAN)

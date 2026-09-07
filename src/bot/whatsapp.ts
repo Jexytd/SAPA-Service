@@ -210,6 +210,13 @@ export function getWhatsAppSocket(): WASocket | null {
   return currentSocket;
 }
 
+export {
+  WhatsAppTargetInfo,
+  resolveWhatsAppTarget,
+  sendWhatsAppMessageSafe
+} from './whatsappUtils.js';
+
+
 export async function requestPairing(phoneNumber: string): Promise<string | null> {
   if (!currentSocket) return null;
   let cleanPhone = phoneNumber.replace(/[^0-9]/g, '');

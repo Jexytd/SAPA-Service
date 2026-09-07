@@ -1,5 +1,6 @@
 import { getDBPool } from '../data/database.js';
 import { realtimeHub } from './realtimeHub.js';
+import { resolveWhatsAppTarget } from '../bot/whatsappUtils.js';
 import crypto from 'crypto';
 
 export type TicketStatus = 'WAITING' | 'ASSIGNED' | 'ACTIVE' | 'PENDING' | 'RESOLVED' | 'CLOSED';
@@ -113,9 +114,19 @@ export class TicketService {
     if (!pool) throw new Error('Database pool tidak tersedia');
 
     const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
-    const [rows]: any = await pool.query('SELECT * FROM users WHERE phone_number = ?', [cleanPhone]);
+    const target = resolveWhatsAppTarget(phoneNumber);
+    const canonicalPhone = target.phone || cleanPhone;
+
+    const candidates = Array.from(new Set([cleanPhone, canonicalPhone, phoneNumber].filter(Boolean)));
+    const placeholders = candidates.map(() => '?').join(', ');
+    const [rows]: any = await pool.query(`SELECT * FROM users WHERE phone_number IN (${placeholders})`, candidates);
 
     if (rows.length > 0) {
+      // Jika di DB tercatat LID namun sekarang sudah terpetakan nomor telepon aslinya, perbarui ke nomor asli
+      if (canonicalPhone && rows[0].phone_number !== canonicalPhone && canonicalPhone.length <= 13) {
+        await pool.query('UPDATE users SET phone_number = ? WHERE id = ?', [canonicalPhone, rows[0].id]);
+        rows[0].phone_number = canonicalPhone;
+      }
       if (name && rows[0].name !== name) {
         await pool.query('UPDATE users SET name = ? WHERE id = ?', [name, rows[0].id]);
         rows[0].name = name;
@@ -126,8 +137,8 @@ export class TicketService {
     const nowStr = getWIBDateTime();
     const newUser: User = {
       id: this.uuid(),
-      phone_number: cleanPhone,
-      name: name || `Pengguna WhatsApp (${cleanPhone.slice(-4)})`,
+      phone_number: canonicalPhone,
+      name: name || `Pengguna WhatsApp (${canonicalPhone.slice(-4)})`,
       created_at: nowStr,
       updated_at: nowStr
     };
@@ -146,14 +157,25 @@ export class TicketService {
     if (!pool) return null;
 
     const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
+    const target = resolveWhatsAppTarget(phoneNumber);
+    const candidates = Array.from(new Set([
+      cleanPhone,
+      target.phone,
+      target.primaryJid?.split('@')[0],
+      target.fallbackJid ? target.fallbackJid.split('@')[0] : ''
+    ].filter(Boolean)));
+
+    if (candidates.length === 0) return null;
+
+    const placeholders = candidates.map(() => '?').join(', ');
     const [rows]: any = await pool.query(`
       SELECT t.*, u.phone_number as user_phone, u.name as user_name, a.name as admin_name
       FROM tickets t
       JOIN users u ON t.user_id = u.id
       LEFT JOIN admins a ON t.assigned_to = a.id
-      WHERE u.phone_number = ? AND t.status IN ('WAITING', 'ASSIGNED', 'ACTIVE', 'PENDING', 'RESOLVED')
+      WHERE u.phone_number IN (${placeholders}) AND t.status IN ('WAITING', 'ASSIGNED', 'ACTIVE', 'PENDING', 'RESOLVED')
       ORDER BY t.created_at DESC LIMIT 1
-    `, [cleanPhone]);
+    `, candidates);
 
     return rows.length > 0 ? (rows[0] as Ticket) : null;
   }
