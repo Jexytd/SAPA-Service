@@ -53,6 +53,10 @@ DATA RESMI STATISTIK BPS KABUPATEN BANGKA (SUMBER RESMI: INDIKATOR MAKRO 2025):
 [TOPIK 10: LAYANAN & KONTAK RESMI PST BPS KAB. BANGKA]
 - Layanan: PST, Publikasi (bangkakab.bps.go.id), Romantik, Konsultasi Sektoral.
 - Kontak: Jl. Ahmad Yani Jalur Dua Sungailiat, Telp (0717) 92492, Email bps1901@bps.go.id.
+
+[TOPIK 11: PORTAL VISUALISASI DATA BPS KAB BANGKA (GARDA)]
+- Portal GARDA (Galeri & Visualisasi Data): Dashboard interaktif, grafik indikator makro, infografis dan ringkasan eksekutif resmi BPS Kabupaten Bangka.
+- Tautan portal: https://s.bps.go.id/GARDABANGKA dan website https://bangkakab.bps.go.id.
 `;
 /**
  * Membangun konteks dinamis dari data yang diinput melalui website admin.

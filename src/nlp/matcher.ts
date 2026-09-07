@@ -2,8 +2,8 @@ import Fuse from 'fuse.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { loadFAQData, PST_CONTACT_CARD, INFLASI_REDIRECT_CARD } from '../data/csvLoader.js';
-import { getFriendlyGreeting, generateDynamicMenu, formatPrettyResponse, getFAQByIndex, getDynamicMenuItems } from './menu.js';
+import { loadFAQData, PST_CONTACT_CARD, INFLASI_REDIRECT_CARD, GARDA_PORTAL_CARD } from '../data/csvLoader.js';
+import { getFriendlyGreeting, generateDynamicMenu, formatPrettyResponse, getFAQByIndex, getDynamicMenuItems, findFaqResponseByLabel } from './menu.js';
 import { queryQwenAI } from './llmFallback.js';
 import { loadBackendStore, DataStatus } from '../data/dbStore.js';
 import { ticketService } from '../services/ticketService.js';
@@ -559,6 +559,16 @@ export async function processUserMessage(
     return PST_CONTACT_CARD;
   }
 
+  // 3.5. Trigger Portal Visualisasi Data (GARDA)
+  const GARDA_KEYWORDS = [
+    'garda', 'portal garda', 'garda bangka', 'portal visualisasi',
+    'visualisasi data', 'visualisasi', 'dashboard visualisasi',
+    'link visualisasi', 'grafik visualisasi', 'galeri data', 'galeri visualisasi'
+  ];
+  if (GARDA_KEYWORDS.some(gk => msgClean === gk || msgClean.includes(gk))) {
+    return GARDA_PORTAL_CARD;
+  }
+
   // 4. Sapaan Ramah Singkat (Greetings) & Menu SAPA BPS
   const GREETINGS = [
     "halo", "hai", "hello", "helo", "hallo", "hay", "hi", "p",
@@ -584,27 +594,47 @@ export async function processUserMessage(
     return generateDynamicMenu(faqData);
   }
 
-  // 6. Input Pilihan Nomor Menu Dinamis
+  // 6. Input Pilihan Nomor Menu Dinamis (Mendukung Menu Dinamis & Template Menu Manual Kustom)
   if (/^\d+$/.test(msgClean)) {
     const num = parseInt(msgClean, 10);
-    const menuItems = getDynamicMenuItems();
+    const menuItems = getDynamicMenuItems(faqData);
     const matchedItem = menuItems.find((m) => m.number === num);
 
     if (matchedItem) {
       if (matchedItem.type === 'service') {
-        if (matchedItem.label.includes('Petugas') || matchedItem.label.includes('PST')) {
+        if (matchedItem.label.toLowerCase().includes('petugas') || matchedItem.label.toLowerCase().includes('pst') || matchedItem.label.toLowerCase().includes('admin') || matchedItem.label.toLowerCase().includes('hubungi')) {
           return await handleCSTicketRequest(sessionId, message);
+        }
+        if (matchedItem.label.toLowerCase().includes('garda') || matchedItem.label.toLowerCase().includes('visualisasi')) {
+          return GARDA_PORTAL_CARD;
+        }
+        // Cek apakah ada di FAQ / template manual kustom (misal: GARDA, portal visualisasi, dll.)
+        const customFaq = findFaqResponseByLabel(matchedItem.label, faqData);
+        if (customFaq) {
+          return formatPrettyResponse(customFaq.topic, customFaq.answer);
+        }
+        if (matchedItem.extraDesc) {
+          return formatPrettyResponse(matchedItem.label, matchedItem.extraDesc);
         }
         if (faqData && faqData[matchedItem.label]) {
           return formatPrettyResponse(matchedItem.label, faqData[matchedItem.label]);
         }
-        return formatPrettyResponse(
-          'Layanan BPS Kabupaten Bangka',
-          'Layanan BPS Kabupaten Bangka mencakup:\n1. Konsultasi Statistik Terpadu (PST)\n2. Permintaan Data Mikro dan Publikasi Resmi BPS\n3. Rekomendasi Kegiatan Statistik (Romantik)\n4. Layanan Pengaduan & Informasi Publik\n\nHubungi petugas kami untuk layanan tatap muka atau daring.'
-        );
+        if (matchedItem.label.toLowerCase().includes('layanan')) {
+          return formatPrettyResponse(
+            'Layanan BPS Kabupaten Bangka',
+            'Layanan BPS Kabupaten Bangka mencakup:\n1. Konsultasi Statistik Terpadu (PST)\n2. Permintaan Data Mikro dan Publikasi Resmi BPS\n3. Rekomendasi Kegiatan Statistik (Romantik)\n4. Layanan Pengaduan & Informasi Publik\n\nHubungi petugas kami untuk layanan tatap muka atau daring.'
+          );
+        }
       }
 
-      // Tipe 'dataset': Cek apakah kategori ini memiliki LEBIH DARI 1 DATASET TERBITAN
+      // Tipe 'dataset' atau opsi kustom:
+      // Prioritas 1: Cek apakah ada kecocokan di template manual FAQ kustom (misal: "Portal Visualisasi Data (GARDA)")
+      const customFaq = findFaqResponseByLabel(matchedItem.label, faqData);
+      if (customFaq) {
+        return formatPrettyResponse(customFaq.topic, customFaq.answer);
+      }
+
+      // Prioritas 2: Cek apakah kategori ini memiliki LEBIH DARI 1 DATASET TERBITAN
       const store = loadBackendStore();
       const targetCategory = (matchedItem.datasetCategory || matchedItem.label).trim().toLowerCase();
       const categoryDatasets = store.datasets.filter((d) => {
@@ -635,11 +665,16 @@ export async function processUserMessage(
         );
       }
 
-      // Jika hanya ada 1 dataset, langsung jawab data resminya
+      // Prioritas 3: Jika hanya ada 1 dataset, langsung jawab data resminya
       const liveData = getPublishedDatasetResponse(matchedItem.datasetId || matchedItem.datasetCategory || matchedItem.datasetName || matchedItem.label);
       if (liveData) {
         console.log(`[MENU LIVE DATA MATCH] Menu ${num} (${matchedItem.label}) dijawab dengan data dinamis website.`);
         return liveData;
+      }
+
+      // Prioritas 4: Cek extraDesc (deskripsi atau link inline pada baris menu)
+      if (matchedItem.extraDesc) {
+        return formatPrettyResponse(matchedItem.label, matchedItem.extraDesc);
       }
 
       const item = getFAQByIndex(num, faqData);
